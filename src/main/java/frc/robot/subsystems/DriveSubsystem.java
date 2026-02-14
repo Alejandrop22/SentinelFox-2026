@@ -1,4 +1,4 @@
-.// Copyright (c) FIRST and other WPILib contributors.
+// Copyright (c) FIRST and other WPILib contributors.
 // Open Source Software; you can modify and/or share it under the terms of
 // the WPILib BSD license file in the root directory of this project.
 
@@ -7,6 +7,8 @@ package frc.robot.subsystems;
 import edu.wpi.first.hal.FRCNetComm.tInstances;
 import edu.wpi.first.hal.FRCNetComm.tResourceType;
 import edu.wpi.first.hal.HAL;
+import edu.wpi.first.math.MathUtil;
+import edu.wpi.first.math.filter.SlewRateLimiter;
 import edu.wpi.first.math.geometry.Pose2d;
 import edu.wpi.first.math.geometry.Rotation2d;
 import edu.wpi.first.math.kinematics.ChassisSpeeds;
@@ -17,6 +19,7 @@ import edu.wpi.first.math.kinematics.SwerveModuleState;
 import edu.wpi.first.wpilibj.ADIS16470_IMU;
 import edu.wpi.first.math.util.Units;
 import frc.robot.Constants.DriveConstants;
+import edu.wpi.first.wpilibj.smartdashboard.SmartDashboard;
 import edu.wpi.first.wpilibj2.command.SubsystemBase;
 
 public class DriveSubsystem extends SubsystemBase {
@@ -26,6 +29,12 @@ public class DriveSubsystem extends SubsystemBase {
   private double m_rotationOverrideValue = 0.0;
   // Track last requested translation magnitude (0..1) so other commands can adapt.
   private double m_lastTranslationMagnitude = 0.0;
+  private final Camara m_camara;
+  private boolean m_autoAimEnabled = false;
+  private final SlewRateLimiter m_autoAimRotLimiter = new SlewRateLimiter(4.0);
+  private static final double kAutoAimKp = -0.02;
+  private static final double kAutoAimDeadbandDeg = 1.5;
+  private static final double kAutoAimMaxRotCmd = 0.35;
   // Create MAXSwerveModules
   private final MAXSwerveModule m_frontLeft = new MAXSwerveModule(
       DriveConstants.kFrontLeftDrivingCanId,
@@ -62,7 +71,8 @@ public class DriveSubsystem extends SubsystemBase {
       });
 
   /** Creates a new DriveSubsystem. */
-  public DriveSubsystem() {
+  public DriveSubsystem(Camara camara) {
+    m_camara = camara;
     // Usage reporting for MAXSwerve template
     HAL.report(tResourceType.kResourceType_RobotDrive, tInstances.kRobotDriveSwerve_MaxSwerve);
     // Calibrate gyro on startup; keep the robot still during this time.
@@ -72,6 +82,7 @@ public class DriveSubsystem extends SubsystemBase {
 
   @Override
   public void periodic() {
+    updateAutoAimRotation();
     // Update the odometry in the periodic block
     m_odometry.update(
     getGyroRotation(),
@@ -81,6 +92,47 @@ public class DriveSubsystem extends SubsystemBase {
             m_rearLeft.getPosition(),
             m_rearRight.getPosition()
         });
+  }
+
+  public synchronized void setAutoAimEnabled(boolean enabled) {
+    m_autoAimEnabled = enabled;
+    if (!enabled) {
+      clearRotationOverride();
+      m_autoAimRotLimiter.reset(0.0);
+    }
+  }
+
+  public synchronized boolean isAutoAimEnabled() {
+    return m_autoAimEnabled;
+  }
+
+  private void updateAutoAimRotation() {
+    if (!m_autoAimEnabled) {
+      SmartDashboard.putBoolean("AutoAim/Enabled", false);
+      return;
+    }
+
+    SmartDashboard.putBoolean("AutoAim/Enabled", true);
+
+    if (!m_camara.hasTag1()) {
+      // Mantiene el modo activo para reenganchar cuando vuelva a detectar el tag.
+      setRotationOverride(0.0);
+      m_autoAimRotLimiter.reset(0.0);
+      SmartDashboard.putBoolean("AutoAim/TrackingTag1", false);
+      return;
+    }
+
+    SmartDashboard.putBoolean("AutoAim/TrackingTag1", true);
+    double yawErrorDeg = MathUtil.inputModulus(m_camara.getTag1YawDeg(), -180.0, 180.0);
+    double rotCmd = 0.0;
+    if (Math.abs(yawErrorDeg) > kAutoAimDeadbandDeg) {
+      rotCmd = MathUtil.clamp(yawErrorDeg * kAutoAimKp, -kAutoAimMaxRotCmd, kAutoAimMaxRotCmd);
+    }
+
+    double smoothRotCmd = m_autoAimRotLimiter.calculate(rotCmd);
+    setRotationOverride(smoothRotCmd);
+    SmartDashboard.putNumber("AutoAim/YawErrorDeg", yawErrorDeg);
+    SmartDashboard.putNumber("AutoAim/RotCmd", smoothRotCmd);
   }
 
   /**

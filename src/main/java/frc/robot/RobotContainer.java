@@ -5,6 +5,7 @@ import edu.wpi.first.wpilibj2.command.button.CommandXboxController;
 import edu.wpi.first.math.MathUtil;
 import edu.wpi.first.wpilibj2.command.RunCommand;
 import frc.robot.subsystems.DriveSubsystem;
+import frc.robot.subsystems.Camara;
 import frc.robot.subsystems.Elevador;
 import frc.robot.subsystems.Intake;
 import frc.robot.subsystems.Shooter;
@@ -12,11 +13,10 @@ import frc.robot.subsystems.AuxMotor;
 import edu.wpi.first.wpilibj2.command.InstantCommand;
 import edu.wpi.first.wpilibj2.command.Commands;
 import frc.robot.Constants.OIConstants;
-import frc.robot.commands.AutoDriveToAprilTag;
-import frc.robot.commands.AimToAprilTag;
 
 public class RobotContainer {
-    private final DriveSubsystem m_robotDrive = new DriveSubsystem();
+    private final Camara m_camara = new Camara();
+    private final DriveSubsystem m_robotDrive = new DriveSubsystem(m_camara);
     private final Elevador m_elevador = new Elevador();
     private final Intake m_intake = new Intake();
     private final Shooter m_shooter = new Shooter();
@@ -179,21 +179,6 @@ public class RobotContainer {
             }, m_shooter)
         );
 
-        // Cruzeta izquierda (POV 270): Aim toggle to AprilTag (press to start/stop continuous alignment)
-        m_driverController.povLeft().onTrue(
-            new InstantCommand(() -> {
-                // If a command exists and is scheduled, cancel it; otherwise start a new one.
-                if (m_aimCommand != null && m_aimCommand.isScheduled()) {
-                    m_aimCommand.cancel();
-                    m_robotDrive.clearRotationOverride();
-                    m_aimCommand = null;
-                } else {
-                    m_aimCommand = new AimToAprilTag(m_robotDrive, "GENERAL_WEBCAM (1)", true);
-                    m_aimCommand.schedule();
-                }
-            })
-        );
-
         // Cruzeta derecha (POV 90): toggle AuxMotor (CAN 52) reverse at 50%
         m_driverController.povRight().onTrue(
             new InstantCommand(() -> {
@@ -205,10 +190,22 @@ public class RobotContainer {
                 m_auxToggleActive = !m_auxToggleActive;
             }, m_auxMotor)
         );
+
+        // Cruzeta izquierda (POV 270): toggle AutoAim hacia AprilTag 1.
+        // Solo activa si en ese momento se detecta el tag 1.
+        m_driverController.povLeft().onTrue(
+            new InstantCommand(() -> {
+                if (m_robotDrive.isAutoAimEnabled()) {
+                    m_robotDrive.setAutoAimEnabled(false);
+                } else if (m_camara.hasTag1()) {
+                    m_robotDrive.setAutoAimEnabled(true);
+                }
+            }, m_robotDrive)
+        );
     }
 
     public Command getAutonomousCommand() {
-        // Autonomous: only run the vision-based driving + shooter control (runs until canceled)
-        return new AutoDriveToAprilTag(m_robotDrive, m_shooter, "GENERAL_WEBCAM (1)");
+        return null;
     }
+
 }
