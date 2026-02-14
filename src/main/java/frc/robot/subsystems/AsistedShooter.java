@@ -25,7 +25,7 @@ public class AsistedShooter extends SubsystemBase {
 	private static final double kMaxShootDistanceMeters = 4.0;
 
 	// Minimum distance clamp to avoid weird extrapolation very near tag.
-	private static final double kMinDistanceMeters = 0.5;
+	private static final double kMinDistanceMeters = 0.3;
 
 	public AsistedShooter(Camara camara) {
 		m_camara = camara;
