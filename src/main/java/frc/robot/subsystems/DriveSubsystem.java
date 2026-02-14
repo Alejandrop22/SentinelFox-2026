@@ -183,10 +183,16 @@ public class DriveSubsystem extends SubsystemBase {
             : new ChassisSpeeds(xSpeedDelivered, ySpeedDelivered, rotDelivered));
     SwerveDriveKinematics.desaturateWheelSpeeds(
         swerveModuleStates, DriveConstants.kMaxSpeedMetersPerSecond);
-    m_frontLeft.setDesiredState(swerveModuleStates[0]);
-    m_frontRight.setDesiredState(swerveModuleStates[1]);
-    m_rearLeft.setDesiredState(swerveModuleStates[2]);
-    m_rearRight.setDesiredState(swerveModuleStates[3]);
+
+  // When AutoAim is enabled we want steering to hold angle crisply.
+  // In normal teleop, relaxing steering hold at (near) zero speed reduces
+  // "fighting" and current spikes during abrupt stick changes.
+  boolean holdSteering = m_autoAimEnabled;
+
+  m_frontLeft.setDesiredState(swerveModuleStates[0], holdSteering);
+  m_frontRight.setDesiredState(swerveModuleStates[1], holdSteering);
+  m_rearLeft.setDesiredState(swerveModuleStates[2], holdSteering);
+  m_rearRight.setDesiredState(swerveModuleStates[3], holdSteering);
   }
 
   /**

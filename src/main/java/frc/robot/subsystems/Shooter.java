@@ -12,7 +12,7 @@ public class Shooter extends SubsystemBase {
 
 	/** Start launcher at default preset (-70%). */
 	public void startLauncher() {
-		m_shooterMotor.set(-0.7); // 70% hacia atras
+		m_shooterMotor.set(-0.8); // 70% hacia atras
 	}
 
 	/** Stop the launcher motor. */

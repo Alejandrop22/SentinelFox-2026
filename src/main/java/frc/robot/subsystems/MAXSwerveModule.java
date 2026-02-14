@@ -32,6 +32,16 @@ public class MAXSwerveModule {
   private double m_chassisAngularOffset = 0;
   private SwerveModuleState m_desiredState = new SwerveModuleState(0.0, new Rotation2d());
 
+  // When the wheel speed command is ~0, continuously holding steering angle with
+  // position PID can cause the module to "fight" during rapid direction changes.
+  // This threshold is in m/s (because we command driving velocity in m/s).
+  private static final double kSteerHoldMinSpeedMetersPerSecond = 0.05;
+
+  // Soft-hold: remember the last commanded steering angle (radians, corrected).
+  // When we're basically stopped and holdSteeringAngle=false, we freeze this
+  // setpoint instead of continually updating it (prevents twitch/flip).
+  private double m_lastSteerSetpointRad = 0.0;
+
   /**
    * Constructs a MAXSwerveModule and configures the driving and turning motor,
    * encoder, and PID controller. This configuration is specific to the REV
@@ -58,6 +68,7 @@ public class MAXSwerveModule {
 
     m_chassisAngularOffset = chassisAngularOffset;
     m_desiredState.angle = new Rotation2d(m_turningEncoder.getPosition());
+    m_lastSteerSetpointRad = m_turningEncoder.getPosition() + m_chassisAngularOffset;
     m_drivingEncoder.setPosition(0);
   }
 
@@ -109,6 +120,18 @@ public class MAXSwerveModule {
    * @param desiredState Desired state with speed and angle.
    */
   public void setDesiredState(SwerveModuleState desiredState) {
+    setDesiredState(desiredState, true);
+  }
+
+  /**
+   * Sets the desired state for the module with optional steering hold.
+   *
+   * @param desiredState Desired state with speed and angle.
+   * @param holdSteeringAngle If true, steer motor runs closed-loop position to hold
+   *                          the requested angle. If false and speed is near zero,
+   *                          the steer motor output is set to 0 to avoid fighting.
+   */
+  public void setDesiredState(SwerveModuleState desiredState, boolean holdSteeringAngle) {
     // Apply chassis angular offset to the desired state.
     SwerveModuleState correctedDesiredState = new SwerveModuleState();
     correctedDesiredState.speedMetersPerSecond = desiredState.speedMetersPerSecond;
@@ -117,9 +140,21 @@ public class MAXSwerveModule {
     // Optimize the reference state to avoid spinning further than 90 degrees.
     correctedDesiredState.optimize(new Rotation2d(m_turningEncoder.getPosition()));
 
-    // Command driving and turning SPARKS towards their respective setpoints.
+    // Command driving SPARK towards the velocity setpoint.
     m_drivingClosedLoopController.setSetpoint(correctedDesiredState.speedMetersPerSecond, ControlType.kVelocity);
-    m_turningClosedLoopController.setSetpoint(correctedDesiredState.angle.getRadians(), ControlType.kPosition);
+
+    // Steering control:
+    // - AutoAim (holdSteeringAngle=true): track the requested angle aggressively.
+    // - Normal teleop (holdSteeringAngle=false): if we're basically stopped, freeze
+    //   the last steering setpoint to avoid flip/jitter from rapid command changes.
+    double requestedSteerRad;
+    if (holdSteeringAngle || Math.abs(correctedDesiredState.speedMetersPerSecond) > kSteerHoldMinSpeedMetersPerSecond) {
+      requestedSteerRad = correctedDesiredState.angle.getRadians();
+      m_lastSteerSetpointRad = requestedSteerRad;
+    } else {
+      requestedSteerRad = m_lastSteerSetpointRad;
+    }
+    m_turningClosedLoopController.setSetpoint(requestedSteerRad, ControlType.kPosition);
 
     m_desiredState = desiredState;
   }
