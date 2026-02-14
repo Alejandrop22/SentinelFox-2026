@@ -68,27 +68,39 @@ public class Camara extends SubsystemBase {
 
             x_distance = target.getBestCameraToTarget().getX();
             y_distance = target.getBestCameraToTarget().getY();
-            distance_to_target = target.getBestCameraToTarget().getZ();
+
+            // NOTE: Do NOT use only Z as "distance".
+            // Use the magnitude of the translation vector (X,Y,Z) for real distance in meters.
+            double z_distance = target.getBestCameraToTarget().getZ();
+            distance_to_target = Math.sqrt(
+                (x_distance * x_distance)
+                    + (y_distance * y_distance)
+                    + (z_distance * z_distance));
             angle_to_target = target.getYaw();
 
-            SmartDashboard.putNumber("X Distance", x_distance);
-            SmartDashboard.putNumber("Y Distance", y_distance);
-            SmartDashboard.putNumber("Distance to Target", distance_to_target);
-            SmartDashboard.putNumber("Angle to Target", angle_to_target);
-            SmartDashboard.putBoolean("AutoAim/HasTag1", has_tag1);
-            SmartDashboard.putNumber("AutoAim/Tag1YawDeg", tag1_yaw_deg);
+            // Vision telemetry (keep names stable to avoid dashboard clutter)
+            SmartDashboard.putBoolean("Vision/HasTargets", true);
+            SmartDashboard.putNumber("Vision/BestTargetYawDeg", angle_to_target);
+            SmartDashboard.putNumber("Vision/DistanceM", distance_to_target);
+            SmartDashboard.putNumber("Vision/X", x_distance);
+            SmartDashboard.putNumber("Vision/Y", y_distance);
+
+            // Tag1-specific telemetry used by auto-aim + assisted shooter
+            SmartDashboard.putBoolean("Vision/HasTag1", has_tag1);
+            SmartDashboard.putNumber("Vision/Tag1YawDeg", tag1_yaw_deg);
         } else {
             x_distance = 0;
             y_distance = 0;
             distance_to_target = 0;
             angle_to_target = 0;
 
-            SmartDashboard.putNumber("X Distance", x_distance);
-            SmartDashboard.putNumber("Y Distance", y_distance);
-            SmartDashboard.putNumber("Distance to Target", distance_to_target);
-            SmartDashboard.putNumber("Angle to Target", angle_to_target);
-            SmartDashboard.putBoolean("AutoAim/HasTag1", false);
-            SmartDashboard.putNumber("AutoAim/Tag1YawDeg", 0);
+            SmartDashboard.putBoolean("Vision/HasTargets", false);
+            SmartDashboard.putNumber("Vision/BestTargetYawDeg", 0);
+            SmartDashboard.putNumber("Vision/DistanceM", 0);
+            SmartDashboard.putNumber("Vision/X", 0);
+            SmartDashboard.putNumber("Vision/Y", 0);
+            SmartDashboard.putBoolean("Vision/HasTag1", false);
+            SmartDashboard.putNumber("Vision/Tag1YawDeg", 0);
         }
     }
 

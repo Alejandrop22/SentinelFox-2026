@@ -6,43 +6,30 @@ import edu.wpi.first.math.MathUtil;
 import edu.wpi.first.wpilibj2.command.RunCommand;
 import frc.robot.subsystems.DriveSubsystem;
 import frc.robot.subsystems.Camara;
-import frc.robot.subsystems.Elevador;
-import frc.robot.subsystems.Intake;
+// import frc.robot.subsystems.Angular;
+// import frc.robot.subsystems.Intake;
 import frc.robot.subsystems.Shooter;
 import frc.robot.subsystems.AuxMotor;
+import frc.robot.subsystems.AsistedShooter;
 import edu.wpi.first.wpilibj2.command.InstantCommand;
-import edu.wpi.first.wpilibj2.command.Commands;
 import frc.robot.Constants.OIConstants;
 
 public class RobotContainer {
     private final Camara m_camara = new Camara();
     private final DriveSubsystem m_robotDrive = new DriveSubsystem(m_camara);
-    private final Elevador m_elevador = new Elevador();
-    private final Intake m_intake = new Intake();
+    // Disabled for now (hardware unplugged): CAN 54 (Angular) + CAN 55 (Intake)
+    // private final Angular m_angular = new Angular();
+    // private final Intake m_intake = new Intake();
     private final Shooter m_shooter = new Shooter();
+    private final AsistedShooter m_asistedShooter = new AsistedShooter(m_camara);
     private final AuxMotor m_auxMotor = new AuxMotor();
     private final CommandXboxController m_driverController =
             new CommandXboxController(Constants.OperatorConstants.kDriverControllerPort);
 
-    private static final double POS_ABAJO_GRADOS = -(360.0 * 27);
-    private static final double POS_ARRIBA_CICLO = POS_ABAJO_GRADOS + (360.0 * 10);
-
-    private final double[] m_posOriginal = new double[1];
-    private boolean m_bToggleActive = false;
-    private boolean m_intakeToggleActive = false;
-    private boolean m_intakeFullToggleActive = false;
+    // --- Angular / Intake (disabled) ---
+    // private boolean m_intakeToggleActive = false;
+    // private boolean m_intakeFullToggleActive = false;
     private boolean m_beltToggleActive = false;
-    private final Command m_bToggleCommand = Commands.sequence(
-        new InstantCommand(() -> m_posOriginal[0] = POS_ABAJO_GRADOS),
-        new InstantCommand(() -> m_elevador.irAPosicion(POS_ARRIBA_CICLO)),
-        Commands.waitUntil(() -> m_elevador.atSetpoint()),
-        Commands.waitSeconds(0.1),
-        new InstantCommand(() -> m_elevador.irAPosicion(POS_ABAJO_GRADOS)),
-        Commands.waitUntil(() -> m_elevador.atSetpoint()),
-        Commands.waitSeconds(0.1)
-    ).repeatedly();
-    // Aim toggle state: we hold a reference to the command and check isScheduled()
-    private Command m_aimCommand = null;
     // Aux motor toggle (CAN 52)
     private boolean m_auxToggleActive = false;
 
@@ -71,36 +58,8 @@ public class RobotContainer {
     }
 
     private void configureBindings() {
-        // --- TUS NUEVOS CONTROLES ---
-
-        // Botón Y: IR ARRIBA (Regresar a 0)
-        m_driverController.y().onTrue(
-            new InstantCommand(() -> {
-                if (m_bToggleActive) {
-                    m_bToggleCommand.cancel();
-                    m_bToggleActive = false;
-                }
-                m_elevador.irAPosicion(-(360*5));
-            })
-        );
-
-        // Botón A: IR ABAJO (Bajar 23 vueltas = -8280 grados)
-        // Usamos negativo porque 0 es arriba
-        m_driverController.a().onTrue(
-            new InstantCommand(() -> {
-                if (m_bToggleActive) {
-                    m_bToggleCommand.cancel();
-                    m_bToggleActive = false;
-                }
-                m_elevador.irAPosicion(-(360*28));
-            })
-        );
-
-        // Botón Start (Tres rayitas): RESET DE EMERGENCIA
-        // Si sientes que el 0 ya no es 0, pícale aquí
-        m_driverController.start().onTrue(
-            new InstantCommand(() -> m_elevador.resetEncoder())
-        );
+        // --- Angular / Intake ---
+        // Disabled for now (hardware unplugged): CAN 54 (Angular) + CAN 55 (Intake)
 
         // Right Bumper: setX (bloqueo de ruedas)
         m_driverController.rightBumper().whileTrue(
@@ -112,60 +71,49 @@ public class RobotContainer {
             new InstantCommand(() -> m_robotDrive.zeroHeading(), m_robotDrive)
         );
 
-        // Botón B: toggle infinito (de -9540 a -7740 y regreso) hasta volver a presionar
-        m_driverController.b().onTrue(
-            new InstantCommand(() -> {
-                if (m_bToggleActive) {
-                    m_bToggleCommand.cancel();
-                    m_elevador.irAPosicion(POS_ABAJO_GRADOS);
-                } else if (m_elevador.isAbajo()) {
-                    m_bToggleCommand.schedule();
-                }
-                m_bToggleActive = !m_bToggleActive;
-            })
-        );
-
-        // Left Trigger: intake hacia atras 60% en toggle
-        m_driverController.leftTrigger().onTrue(
-            new InstantCommand(() -> {
-                if (m_intakeToggleActive) {
-                    m_intake.stop();
-                } else {
-                    m_intake.intakeReverse();
-                }
-                m_intakeToggleActive = !m_intakeToggleActive;
-            }, m_intake)
-        );
-
-        // Right Trigger: lanzador (motor CAN 51)
-        m_driverController.rightTrigger().onTrue(
-            new InstantCommand(() -> m_shooter.startLauncher(), m_shooter)
-        ).onFalse(
-            new InstantCommand(() -> m_shooter.stopLauncher(), m_shooter)
-        );
-
-        // LB: intake hacia adelante 40% mientras se presiona
-        m_driverController.leftBumper().whileTrue(
-            new InstantCommand(() -> m_intake.intakeForward(), m_intake)
-        ).onFalse(
-            new InstantCommand(() -> m_intake.stop(), m_intake)
-        );
-
-        // Cruzeta arriba (POV 0): intake a -100% en toggle
-        m_driverController.povUp().onTrue(
-            new InstantCommand(() -> {
-                if (m_intakeFullToggleActive) {
-                    if (m_intakeToggleActive) {
-                        m_intake.intakeReverse(); // regresar a -60%
-                    } else {
-                        m_intake.stop();
+        // Right Trigger:
+        // If Tag1 is visible AND within 4m => assisted shooter (distance-based percent).
+        // Otherwise => manual shooter (always -0.8).
+        m_driverController.rightTrigger().whileTrue(
+            new RunCommand(
+                () -> {
+                    // Emergency has top priority: leave CAN 51 alone.
+                    if (m_shooter.isEmergencyEnabled()) {
+                        m_asistedShooter.stop();
+                        return;
                     }
-                } else {
-                    m_intake.intakeFullReverse(); // -100%
-                }
-                m_intakeFullToggleActive = !m_intakeFullToggleActive;
-            }, m_intake)
+                    if (m_asistedShooter.canShootNow()) {
+                        // Ensure manual isn't running
+                        m_shooter.stopManualShooter();
+
+                        // AssistedShooter no controla el motor directamente para evitar doble instancia CAN 51.
+                        m_asistedShooter.runAssisted(); // solo telemetry
+                        m_shooter.setAssistedShooterPercent(m_asistedShooter.getDesiredPercent());
+                    } else {
+                        // Ensure assisted isn't running
+                        m_asistedShooter.stop();
+                        m_shooter.startManualShooter();
+                    }
+                },
+                m_asistedShooter, m_shooter)
+        ).onFalse(
+            new InstantCommand(() -> {
+                m_asistedShooter.stop();
+                m_shooter.stopManualShooter();
+            }, m_asistedShooter, m_shooter)
         );
+
+
+        // Stick click (L3 / R3): emergency shooter toggle (-0.5)
+        // If this is enabled, we stop assisted shooter so only one thing drives CAN 51.
+        InstantCommand toggleEmergencyShooterCmd = new InstantCommand(() -> {
+            // Turning on/off is handled in Shooter.
+            m_asistedShooter.stop();
+            m_shooter.toggleEmergencyShooter();
+        }, m_shooter, m_asistedShooter);
+
+        m_driverController.leftStick().onTrue(toggleEmergencyShooterCmd);
+        m_driverController.rightStick().onTrue(toggleEmergencyShooterCmd);
 
         // Cruzeta abajo (POV 180): banda a 50% en toggle
         m_driverController.povDown().onTrue(
