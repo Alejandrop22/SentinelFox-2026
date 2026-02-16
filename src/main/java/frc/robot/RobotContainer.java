@@ -25,8 +25,7 @@ public class RobotContainer {
     private final CommandXboxController m_driverController =
             new CommandXboxController(Constants.OperatorConstants.kDriverControllerPort);
 
-    private boolean m_intakeToggleActive = false;
-    private boolean m_intakeFullToggleActive = false;
+    // --- Angular / Intake ---
     private boolean m_beltToggleActive = false;
     private boolean m_auxToggleActive = false;
 
@@ -50,6 +49,33 @@ public class RobotContainer {
     }
 
     private void configureBindings() {
+        // --- Angular / Intake (CAN 54 + CAN 55) ---
+
+        // Intake: LT (while held) forward
+        m_driverController.leftTrigger().whileTrue(
+            new RunCommand(() -> m_intake.intakeForward(), m_intake)
+        ).onFalse(
+            new InstantCommand(() -> m_intake.stop(), m_intake)
+        );
+
+        // Intake: LB (while held) reverse
+        m_driverController.leftBumper().whileTrue(
+            new RunCommand(() -> m_intake.intakeReverse(), m_intake)
+        ).onFalse(
+            new InstantCommand(() -> m_intake.stop(), m_intake)
+        );
+
+        // Angular: A -> posición 0° (home)
+        m_driverController.a().onTrue(
+            new InstantCommand(() -> m_angular.irAPosicion(0.0), m_angular)
+        );
+
+        // Angular: Y -> abajo
+        m_driverController.y().onTrue(
+            new InstantCommand(() -> m_angular.irAPosicion(-(360.0 * 28)), m_angular)
+        );
+
+        // Right Bumper: setX (bloqueo de ruedas)
         m_driverController.rightBumper().whileTrue(
             new RunCommand(() -> m_robotDrive.setX(), m_robotDrive)
         );
