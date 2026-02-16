@@ -6,8 +6,8 @@ import edu.wpi.first.math.MathUtil;
 import edu.wpi.first.wpilibj2.command.RunCommand;
 import frc.robot.subsystems.DriveSubsystem;
 import frc.robot.subsystems.Camara;
-// import frc.robot.subsystems.Angular;
-// import frc.robot.subsystems.Intake;
+import frc.robot.subsystems.Angular;
+import frc.robot.subsystems.Intake;
 import frc.robot.subsystems.Shooter;
 import frc.robot.subsystems.AuxMotor;
 import frc.robot.subsystems.AsistedShooter;
@@ -17,18 +17,15 @@ import frc.robot.Constants.OIConstants;
 public class RobotContainer {
     private final Camara m_camara = new Camara();
     private final DriveSubsystem m_robotDrive = new DriveSubsystem(m_camara);
-    // Disabled for now (hardware unplugged): CAN 54 (Angular) + CAN 55 (Intake)
-    // private final Angular m_angular = new Angular();
-    // private final Intake m_intake = new Intake();
+    private final Angular m_angular = new Angular();
+    private final Intake m_intake = new Intake();
     private final Shooter m_shooter = new Shooter();
     private final AsistedShooter m_asistedShooter = new AsistedShooter(m_camara);
     private final AuxMotor m_auxMotor = new AuxMotor();
     private final CommandXboxController m_driverController =
             new CommandXboxController(Constants.OperatorConstants.kDriverControllerPort);
 
-    // --- Angular / Intake (disabled) ---
-    // private boolean m_intakeToggleActive = false;
-    // private boolean m_intakeFullToggleActive = false;
+    // --- Angular / Intake ---
     private boolean m_beltToggleActive = false;
     // Aux motor toggle (CAN 52)
     private boolean m_auxToggleActive = false;
@@ -58,8 +55,31 @@ public class RobotContainer {
     }
 
     private void configureBindings() {
-        // --- Angular / Intake ---
-        // Disabled for now (hardware unplugged): CAN 54 (Angular) + CAN 55 (Intake)
+        // --- Angular / Intake (CAN 54 + CAN 55) ---
+
+        // Intake: LT (while held) forward
+        m_driverController.leftTrigger().whileTrue(
+            new RunCommand(() -> m_intake.intakeForward(), m_intake)
+        ).onFalse(
+            new InstantCommand(() -> m_intake.stop(), m_intake)
+        );
+
+        // Intake: LB (while held) reverse
+        m_driverController.leftBumper().whileTrue(
+            new RunCommand(() -> m_intake.intakeReverse(), m_intake)
+        ).onFalse(
+            new InstantCommand(() -> m_intake.stop(), m_intake)
+        );
+
+        // Angular: A -> posición 0° (home)
+        m_driverController.a().onTrue(
+            new InstantCommand(() -> m_angular.irAPosicion(0.0), m_angular)
+        );
+
+        // Angular: Y -> abajo
+        m_driverController.y().onTrue(
+            new InstantCommand(() -> m_angular.irAPosicion(-(360.0 * 28)), m_angular)
+        );
 
         // Right Bumper: setX (bloqueo de ruedas)
         m_driverController.rightBumper().whileTrue(
