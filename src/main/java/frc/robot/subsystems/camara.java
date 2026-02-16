@@ -68,24 +68,17 @@ public class Camara extends SubsystemBase {
 
             x_distance = target.getBestCameraToTarget().getX();
             y_distance = target.getBestCameraToTarget().getY();
-
-            // NOTE: Do NOT use only Z as "distance".
-            // Use the magnitude of the translation vector (X,Y,Z) for real distance in meters.
             double z_distance = target.getBestCameraToTarget().getZ();
             distance_to_target = Math.sqrt(
                 (x_distance * x_distance)
                     + (y_distance * y_distance)
                     + (z_distance * z_distance));
             angle_to_target = target.getYaw();
-
-            // Vision telemetry (keep names stable to avoid dashboard clutter)
             SmartDashboard.putBoolean("Vision/HasTargets", true);
             SmartDashboard.putNumber("Vision/BestTargetYawDeg", angle_to_target);
             SmartDashboard.putNumber("Vision/DistanceM", distance_to_target);
             SmartDashboard.putNumber("Vision/X", x_distance);
             SmartDashboard.putNumber("Vision/Y", y_distance);
-
-            // Tag1-specific telemetry used by auto-aim + assisted shooter
             SmartDashboard.putBoolean("Vision/HasTag1", has_tag1);
             SmartDashboard.putNumber("Vision/Tag1YawDeg", tag1_yaw_deg);
         } else {

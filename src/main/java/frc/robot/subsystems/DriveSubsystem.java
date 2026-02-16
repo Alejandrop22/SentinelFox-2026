@@ -1,7 +1,3 @@
-// Copyright (c) FIRST and other WPILib contributors.
-// Open Source Software; you can modify and/or share it under the terms of
-// the WPILib BSD license file in the root directory of this project.
-
 package frc.robot.subsystems;
 
 import edu.wpi.first.hal.FRCNetComm.tInstances;
@@ -23,11 +19,8 @@ import edu.wpi.first.wpilibj.smartdashboard.SmartDashboard;
 import edu.wpi.first.wpilibj2.command.SubsystemBase;
 
 public class DriveSubsystem extends SubsystemBase {
-  // Rotation override allows another piece of code (like a vision aim command)
-  // to supply rotation while leaving joystick translation in control.
   private boolean m_rotationOverrideActive = false;
   private double m_rotationOverrideValue = 0.0;
-  // Track last requested translation magnitude (0..1) so other commands can adapt.
   private double m_lastTranslationMagnitude = 0.0;
   private final Camara m_camara;
   private boolean m_autoAimEnabled = false;
@@ -35,7 +28,6 @@ public class DriveSubsystem extends SubsystemBase {
   private static final double kAutoAimKp = -0.02;
   private static final double kAutoAimDeadbandDeg = 1.5;
   private static final double kAutoAimMaxRotCmd = 0.35;
-  // Create MAXSwerveModules
   private final MAXSwerveModule m_frontLeft = new MAXSwerveModule(
       DriveConstants.kFrontLeftDrivingCanId,
       DriveConstants.kFrontLeftTurningCanId,
@@ -56,10 +48,8 @@ public class DriveSubsystem extends SubsystemBase {
       DriveConstants.kRearRightTurningCanId,
       DriveConstants.kBackRightChassisAngularOffset);
 
-  // The gyro sensor
   private final ADIS16470_IMU m_gyro = new ADIS16470_IMU();
 
-  // Odometry class for tracking robot pose
   SwerveDriveOdometry m_odometry = new SwerveDriveOdometry(
       DriveConstants.kDriveKinematics,
     getGyroRotation(),
@@ -70,12 +60,9 @@ public class DriveSubsystem extends SubsystemBase {
           m_rearRight.getPosition()
       });
 
-  /** Creates a new DriveSubsystem. */
   public DriveSubsystem(Camara camara) {
     m_camara = camara;
-    // Usage reporting for MAXSwerve template
     HAL.report(tResourceType.kResourceType_RobotDrive, tInstances.kRobotDriveSwerve_MaxSwerve);
-    // Calibrate gyro on startup; keep the robot still during this time.
     m_gyro.calibrate();
     m_gyro.reset();
   }
@@ -83,7 +70,6 @@ public class DriveSubsystem extends SubsystemBase {
   @Override
   public void periodic() {
     updateAutoAimRotation();
-    // Update the odometry in the periodic block
     m_odometry.update(
     getGyroRotation(),
         new SwerveModulePosition[] {
@@ -115,7 +101,6 @@ public class DriveSubsystem extends SubsystemBase {
     SmartDashboard.putBoolean("AutoAim/Enabled", true);
 
     if (!m_camara.hasTag1()) {
-      // Mantiene el modo activo para reenganchar cuando vuelva a detectar el tag.
       setRotationOverride(0.0);
       m_autoAimRotLimiter.reset(0.0);
       SmartDashboard.putBoolean("AutoAim/TrackingTag1", false);
@@ -171,7 +156,6 @@ public class DriveSubsystem extends SubsystemBase {
    *                      field.
    */
   public void drive(double xSpeed, double ySpeed, double rot, boolean fieldRelative) {
-    // Convert the commanded speeds into the correct units for the drivetrain
     double xSpeedDelivered = xSpeed * DriveConstants.kMaxSpeedMetersPerSecond;
     double ySpeedDelivered = ySpeed * DriveConstants.kMaxSpeedMetersPerSecond;
     double rotDelivered = rot * DriveConstants.kMaxAngularSpeed;
@@ -183,10 +167,6 @@ public class DriveSubsystem extends SubsystemBase {
             : new ChassisSpeeds(xSpeedDelivered, ySpeedDelivered, rotDelivered));
     SwerveDriveKinematics.desaturateWheelSpeeds(
         swerveModuleStates, DriveConstants.kMaxSpeedMetersPerSecond);
-
-  // When AutoAim is enabled we want steering to hold angle crisply.
-  // In normal teleop, relaxing steering hold at (near) zero speed reduces
-  // "fighting" and current spikes during abrupt stick changes.
   boolean holdSteering = m_autoAimEnabled;
 
   m_frontLeft.setDesiredState(swerveModuleStates[0], holdSteering);
@@ -195,51 +175,27 @@ public class DriveSubsystem extends SubsystemBase {
   m_rearRight.setDesiredState(swerveModuleStates[3], holdSteering);
   }
 
-  /**
-   * Request that future drive calls use this rotation value instead of operator rotation.
-   * Call {@link #clearRotationOverride()} to stop overriding.
-   * @param rot rotation fraction in [-1,1]
-   */
   public synchronized void setRotationOverride(double rot) {
     m_rotationOverrideActive = true;
     m_rotationOverrideValue = Math.max(-1.0, Math.min(1.0, rot));
   }
 
-  /**
-   * Clear any rotation override so the operator regains rotation control.
-   */
   public synchronized void clearRotationOverride() {
     m_rotationOverrideActive = false;
   }
 
-  /**
-   * Helper used by default drive code to pick the rotation input: the override if active,
-   * otherwise the requested operator rotation.
-   * @param requested the operator rotation input (fraction)
-   * @return the rotation to actually use
-   */
   public synchronized double getRotationForDrive(double requested) {
     return m_rotationOverrideActive ? m_rotationOverrideValue : requested;
   }
 
-  /**
-   * Store the most recent translation magnitude (0..1). Call from the default drive
-   * command so aim code can reduce rotation when translation is high.
-   */
   public synchronized void setLastTranslationMagnitude(double mag) {
     m_lastTranslationMagnitude = Math.max(0.0, Math.min(1.0, mag));
   }
 
-  /**
-   * Returns last reported translation magnitude in [0,1].
-   */
   public synchronized double getLastTranslationMagnitude() {
     return m_lastTranslationMagnitude;
   }
 
-  /**
-   * Sets the wheels into an X formation to prevent movement.
-   */
   public void setX() {
     m_frontLeft.setDesiredState(new SwerveModuleState(0, Rotation2d.fromDegrees(45)));
     m_frontRight.setDesiredState(new SwerveModuleState(0, Rotation2d.fromDegrees(-45)));
@@ -247,11 +203,6 @@ public class DriveSubsystem extends SubsystemBase {
     m_rearRight.setDesiredState(new SwerveModuleState(0, Rotation2d.fromDegrees(45)));
   }
 
-  /**
-   * Sets the swerve ModuleStates.
-   *
-   * @param desiredStates The desired SwerveModule states.
-   */
   public void setModuleStates(SwerveModuleState[] desiredStates) {
     SwerveDriveKinematics.desaturateWheelSpeeds(
         desiredStates, DriveConstants.kMaxSpeedMetersPerSecond);
