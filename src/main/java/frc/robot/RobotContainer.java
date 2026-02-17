@@ -1,4 +1,4 @@
-//Octavo commit
+//Noveno commit
 
 package frc.robot;
 
@@ -28,8 +28,12 @@ public class RobotContainer {
             new CommandXboxController(Constants.OperatorConstants.kDriverControllerPort);
 
     // --- Angular / Intake ---
-    private boolean m_beltToggleActive = false;
-    private boolean m_auxToggleActive = false;
+    private boolean m_intake60ToggleActive = false;
+    private boolean m_intake100ToggleActive = false;
+    private boolean m_beltAuxComboToggleActive = false;
+
+    // Angular jog (para calibración / reset 0)
+    private boolean m_angularJogActive = false;
 
     public RobotContainer() {
         configureBindings();
@@ -53,11 +57,42 @@ public class RobotContainer {
     private void configureBindings() {
         // --- Angular / Intake (CAN 54 + CAN 55) ---
 
-        // Intake: LT (while held) forward
-        m_driverController.leftTrigger().whileTrue(
-            new RunCommand(() -> m_intake.intakeForward(), m_intake)
-        ).onFalse(
-            new InstantCommand(() -> m_intake.stop(), m_intake)
+        // Intake: LT (toggle) ~60% forward
+        // Si POVUp (100%) está activo, LT no lo apaga; solo define el "estado anterior".
+        m_driverController.leftTrigger().onTrue(
+            new InstantCommand(() -> {
+                m_intake60ToggleActive = !m_intake60ToggleActive;
+
+                // Si estamos en 100%, no tocar el motor; solo guardar el estado.
+                if (m_intake100ToggleActive) {
+                    return;
+                }
+
+                if (m_intake60ToggleActive) {
+                    m_intake.intakeForward();
+                } else {
+                    m_intake.stop();
+                }
+            }, m_intake)
+        );
+
+        // Intake: POVUp (toggle) 100% forward
+        // Al apagar, regresa al estado anterior: si LT estaba activo, vuelve a ~60%; si no, se apaga.
+        m_driverController.povUp().onTrue(
+            new InstantCommand(() -> {
+                m_intake100ToggleActive = !m_intake100ToggleActive;
+                if (m_intake100ToggleActive) {
+                    // Prender 100% forward
+                    m_intake.intakeFullReverse();
+                } else {
+                    // Apagar 100%: regresar a estado anterior (LT 60% o apagado)
+                    if (m_intake60ToggleActive) {
+                        m_intake.intakeForward();
+                    } else {
+                        m_intake.stop();
+                    }
+                }
+            }, m_intake)
         );
 
         // Intake: LB (while held) reverse
@@ -69,7 +104,12 @@ public class RobotContainer {
 
         // Angular: A -> posición 0° (home)
         m_driverController.a().onTrue(
-            new InstantCommand(() -> m_angular.irAPosicion(0.0), m_angular)
+            new InstantCommand(() -> m_angular.irAPosicion((-360*5)), m_angular)
+        );
+
+        // Angular: B -> toggle ciclo anti-atoradas (solo si ya está abajo)
+        m_driverController.b().onTrue(
+            new InstantCommand(() -> m_angular.toggleUnjamCycle(), m_angular)
         );
 
         // Angular: Y -> abajo
@@ -115,26 +155,43 @@ public class RobotContainer {
         m_driverController.leftStick().onTrue(toggleEmergencyShooterCmd);
         m_driverController.rightStick().onTrue(toggleEmergencyShooterCmd);
 
+        // POVDown: toggle combinado Banda + AuxMotor
         m_driverController.povDown().onTrue(
             new InstantCommand(() -> {
-                if (m_beltToggleActive) {
-                    m_shooter.stopBelt();
-                } else {
+                m_beltAuxComboToggleActive = !m_beltAuxComboToggleActive;
+
+                if (m_beltAuxComboToggleActive) {
                     m_shooter.startBelt();
+                    m_auxMotor.startReverse50();
+                } else {
+                    m_shooter.stopBelt();
+                    m_auxMotor.stop();
                 }
-                m_beltToggleActive = !m_beltToggleActive;
-            }, m_shooter)
+            }, m_shooter, m_auxMotor)
         );
 
-        m_driverController.povRight().onTrue(
-            new InstantCommand(() -> {
-                if (m_auxToggleActive) {
-                    m_auxMotor.stop();
-                } else {
-                    m_auxMotor.startReverse50();
+        // POVRight: ya no se usa (se combinó en POVDown)
+
+        // POVRight (while held): Angular open-loop 20% (SIN PID) para calibración
+        // Mientras se sostiene, mueve el Angular; al soltar, lo apaga (se queda donde está).
+        m_driverController.povRight().whileTrue(
+            new RunCommand(() -> {
+                if (!m_angularJogActive) {
+                    m_angularJogActive = true;
                 }
-                m_auxToggleActive = !m_auxToggleActive;
-            }, m_auxMotor)
+                m_angular.setOpenLoopPercent(0.20);
+            }, m_angular)
+        ).onFalse(
+            new InstantCommand(() -> {
+                m_angularJogActive = false;
+                m_angular.stopOpenLoop();
+            }, m_angular)
+        );
+
+        // Back button: tomar esta posición actual como 0 del Angular (CAN 54)
+        // Nota: 'back()' existe en CommandXboxController para Xbox (View/Back).
+        m_driverController.back().onTrue(
+            new InstantCommand(() -> m_angular.resetEncoder(), m_angular)
         );
 
         m_driverController.povLeft().onTrue(
