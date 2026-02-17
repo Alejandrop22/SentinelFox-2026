@@ -78,6 +78,13 @@ public class DriveSubsystem extends SubsystemBase {
             m_rearLeft.getPosition(),
             m_rearRight.getPosition()
         });
+
+	Pose2d pose = m_odometry.getPoseMeters();
+	SmartDashboard.putNumber("Drive/HeadingDeg", getHeading());
+	SmartDashboard.putNumber("Drive/TurnRateDps", getTurnRate());
+	SmartDashboard.putNumber("Drive/PoseX", pose.getX());
+	SmartDashboard.putNumber("Drive/PoseY", pose.getY());
+	SmartDashboard.putNumber("Drive/PoseDeg", pose.getRotation().getDegrees());
   }
 
   public synchronized void setAutoAimEnabled(boolean enabled) {

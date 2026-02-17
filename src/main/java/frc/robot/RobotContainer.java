@@ -66,12 +66,12 @@ public class RobotContainer {
         );
 
         // Angular: A -> posición 0° (home)
-        m_driverController.a().onTrue(
+        m_driverController.y().onTrue(
             new InstantCommand(() -> m_angular.irAPosicion(0.0), m_angular)
         );
 
         // Angular: Y -> abajo
-        m_driverController.y().onTrue(
+        m_driverController.a().onTrue(
             new InstantCommand(() -> m_angular.irAPosicion(-(360.0 * 28)), m_angular)
         );
 
