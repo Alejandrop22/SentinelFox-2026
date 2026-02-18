@@ -28,7 +28,7 @@ public class RobotContainer {
             new CommandXboxController(Constants.OperatorConstants.kDriverControllerPort);
 
     // --- Angular / Intake ---
-    private boolean m_intake60ToggleActive = false;
+    private boolean m_intakeToggleActive = false;
     private boolean m_intake100ToggleActive = false;
     private boolean m_beltAuxComboToggleActive = false;
 
@@ -57,19 +57,19 @@ public class RobotContainer {
     private void configureBindings() {
         // --- Angular / Intake (CAN 54 + CAN 55) ---
 
-        // Intake: LT (toggle) ~60% forward
+        // Intake: LT (toggle) usando intakeReverse() (la velocidad la ajustas en Intake)
         // Si POVUp (100%) está activo, LT no lo apaga; solo define el "estado anterior".
         m_driverController.leftTrigger().onTrue(
             new InstantCommand(() -> {
-                m_intake60ToggleActive = !m_intake60ToggleActive;
+                m_intakeToggleActive = !m_intakeToggleActive;
 
                 // Si estamos en 100%, no tocar el motor; solo guardar el estado.
                 if (m_intake100ToggleActive) {
                     return;
                 }
 
-                if (m_intake60ToggleActive) {
-                    m_intake.intakeForward();
+                if (m_intakeToggleActive) {
+                    m_intake.intakeReverse();
                 } else {
                     m_intake.stop();
                 }
@@ -85,9 +85,9 @@ public class RobotContainer {
                     // Prender 100% forward
                     m_intake.intakeFullReverse();
                 } else {
-                    // Apagar 100%: regresar a estado anterior (LT 60% o apagado)
-                    if (m_intake60ToggleActive) {
-                        m_intake.intakeForward();
+                    // Apagar 100%: regresar a estado anterior (LT o apagado)
+                    if (m_intakeToggleActive) {
+                        m_intake.intakeReverse();
                     } else {
                         m_intake.stop();
                     }
@@ -97,7 +97,7 @@ public class RobotContainer {
 
         // Intake: LB (while held) reverse
         m_driverController.leftBumper().whileTrue(
-            new RunCommand(() -> m_intake.intakeReverse(), m_intake)
+            new RunCommand(() -> m_intake.intakeForward(), m_intake)
         ).onFalse(
             new InstantCommand(() -> m_intake.stop(), m_intake)
         );
@@ -114,7 +114,12 @@ public class RobotContainer {
 
         // Angular: Y -> abajo
         m_driverController.y().onTrue(
-            new InstantCommand(() -> m_angular.irAPosicion(-(360.0 * 28)), m_angular)
+            new InstantCommand(() -> m_angular.irAPosicion(-(360.0 * 29)), m_angular)
+        );
+
+        // Angular: START -> posición intermedia
+        m_driverController.start().onTrue(
+            new InstantCommand(() -> m_angular.irAPosicion(-(360.0 * 23)), m_angular)
         );
 
         // Right Bumper: setX (bloqueo de ruedas)
