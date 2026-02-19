@@ -15,7 +15,7 @@ public class AsistedShooter extends SubsystemBase {
 	private static final double kV2 = -0.625;
 	private static final double kD3 = 3.0;
 	private static final double kV3 = -0.700;
-	private static final double kMaxShootDistanceMeters = 4.0;
+	private static final double kMaxShootDistanceMeters = 3.0;
 	private static final double kMinDistanceMeters = 0.3;
 
 	public AsistedShooter(Camara camara) {

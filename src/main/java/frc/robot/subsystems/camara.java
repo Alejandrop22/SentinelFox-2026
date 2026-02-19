@@ -8,7 +8,7 @@ import edu.wpi.first.wpilibj.smartdashboard.SmartDashboard;
 
 public class Camara extends SubsystemBase {
 
-    public final PhotonCamera camera = new PhotonCamera("GENERAL_WEBCAM (1)");
+    public final PhotonCamera camera = new PhotonCamera("Arducam_OV9281_USB_Camera");
 
     private double x_distance;
     private double y_distance;
