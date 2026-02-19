@@ -28,6 +28,17 @@ public class DriveSubsystem extends SubsystemBase {
   private static final double kAutoAimKp = -0.02;
   private static final double kAutoAimDeadbandDeg = 1.5;
   private static final double kAutoAimMaxRotCmd = 0.35;
+
+  // Lead compensation (tuneable)
+  private static final double kMaxLeadDistanceMeters = 3.0;
+  private static final double kMinLeadDistanceMeters = 0.30;
+  // Tiempo de vuelo "aprox" del tiro (s). Ajusta en práctica.
+  private static final double kShotFlightTimeSec = 0.35;
+  // Limitar el lead total por seguridad.
+  private static final double kMaxLeadDeg = 15.0;
+
+  // Última velocidad del chasis (robot-relative), actualizada en drive().
+  private ChassisSpeeds m_lastChassisSpeeds = new ChassisSpeeds();
   private final MAXSwerveModule m_frontLeft = new MAXSwerveModule(
       DriveConstants.kFrontLeftDrivingCanId,
       DriveConstants.kFrontLeftTurningCanId,
@@ -116,14 +127,36 @@ public class DriveSubsystem extends SubsystemBase {
 
     SmartDashboard.putBoolean("AutoAim/TrackingTag1", true);
     double yawErrorDeg = MathUtil.inputModulus(m_camara.getTag1YawDeg(), -180.0, 180.0);
+
+    // --- Lead compensation por movimiento lateral ---
+    double dist = m_camara.getDistanceToTarget();
+    double yawLeadDeg = 0.0;
+    boolean leadActive = false;
+    if (dist > kMinLeadDistanceMeters && dist <= kMaxLeadDistanceMeters) {
+      ChassisSpeeds speeds = getLastChassisSpeeds();
+      double vLat = speeds.vyMetersPerSecond; // robot-relative +izquierda
+      // Aproximación: ángulo = atan2(desplazamiento lateral, distancia)
+      // desplazamiento lateral ~= vLat * t_flight
+      yawLeadDeg = Math.toDegrees(Math.atan2(vLat * kShotFlightTimeSec, dist));
+      yawLeadDeg = MathUtil.clamp(yawLeadDeg, -kMaxLeadDeg, kMaxLeadDeg);
+      leadActive = true;
+    }
+
+    // Si vamos +izquierda (vy>0), necesitamos "apuntar" un poco a la izquierda del objetivo
+    // (restar al error de yaw de la cámara para cancelar el movimiento). Si se invierte, ajusta el signo aquí.
+    double yawErrorWithLeadDeg = yawErrorDeg + yawLeadDeg;
     double rotCmd = 0.0;
-    if (Math.abs(yawErrorDeg) > kAutoAimDeadbandDeg) {
-      rotCmd = MathUtil.clamp(yawErrorDeg * kAutoAimKp, -kAutoAimMaxRotCmd, kAutoAimMaxRotCmd);
+    if (Math.abs(yawErrorWithLeadDeg) > kAutoAimDeadbandDeg) {
+      rotCmd = MathUtil.clamp(yawErrorWithLeadDeg * kAutoAimKp, -kAutoAimMaxRotCmd, kAutoAimMaxRotCmd);
     }
 
     double smoothRotCmd = m_autoAimRotLimiter.calculate(rotCmd);
     setRotationOverride(smoothRotCmd);
     SmartDashboard.putNumber("AutoAim/YawErrorDeg", yawErrorDeg);
+    SmartDashboard.putBoolean("AutoAim/LeadActive", leadActive);
+    SmartDashboard.putNumber("AutoAim/DistanceM", dist);
+    SmartDashboard.putNumber("AutoAim/LeadDeg", yawLeadDeg);
+    SmartDashboard.putNumber("AutoAim/YawErrorWithLeadDeg", yawErrorWithLeadDeg);
     SmartDashboard.putNumber("AutoAim/RotCmd", smoothRotCmd);
   }
 
@@ -167,11 +200,14 @@ public class DriveSubsystem extends SubsystemBase {
     double ySpeedDelivered = ySpeed * DriveConstants.kMaxSpeedMetersPerSecond;
     double rotDelivered = rot * DriveConstants.kMaxAngularSpeed;
 
-    var swerveModuleStates = DriveConstants.kDriveKinematics.toSwerveModuleStates(
-        fieldRelative
-            ? ChassisSpeeds.fromFieldRelativeSpeeds(xSpeedDelivered, ySpeedDelivered, rotDelivered,
-        getGyroRotation())
-            : new ChassisSpeeds(xSpeedDelivered, ySpeedDelivered, rotDelivered));
+  ChassisSpeeds speeds = fieldRelative
+    ? ChassisSpeeds.fromFieldRelativeSpeeds(xSpeedDelivered, ySpeedDelivered, rotDelivered, getGyroRotation())
+    : new ChassisSpeeds(xSpeedDelivered, ySpeedDelivered, rotDelivered);
+
+  // Guardar robot-relative para compensaciones (proyectiles, etc.)
+  m_lastChassisSpeeds = speeds;
+
+  var swerveModuleStates = DriveConstants.kDriveKinematics.toSwerveModuleStates(speeds);
     SwerveDriveKinematics.desaturateWheelSpeeds(
         swerveModuleStates, DriveConstants.kMaxSpeedMetersPerSecond);
   boolean holdSteering = m_autoAimEnabled;
@@ -180,6 +216,14 @@ public class DriveSubsystem extends SubsystemBase {
   m_frontRight.setDesiredState(swerveModuleStates[1], holdSteering);
   m_rearLeft.setDesiredState(swerveModuleStates[2], holdSteering);
   m_rearRight.setDesiredState(swerveModuleStates[3], holdSteering);
+  }
+
+  /**
+   * Velocidad estimada del chasis (robot-relative) de la última orden de manejo.
+   * vx: +adelante (m/s), vy: +izquierda (m/s), omega: rad/s.
+   */
+  public synchronized ChassisSpeeds getLastChassisSpeeds() {
+    return m_lastChassisSpeeds;
   }
 
   public synchronized void setRotationOverride(double rot) {
