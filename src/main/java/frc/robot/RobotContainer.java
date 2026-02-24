@@ -1,5 +1,3 @@
-//Noveno commit
-
 package frc.robot;
 
 import edu.wpi.first.wpilibj2.command.Command;
@@ -13,27 +11,40 @@ import frc.robot.subsystems.Intake;
 import frc.robot.subsystems.Shooter;
 import frc.robot.subsystems.AuxMotor;
 import frc.robot.subsystems.AsistedShooter;
+import frc.robot.subsystems.Alignment;
 import edu.wpi.first.wpilibj2.command.InstantCommand;
 import frc.robot.Constants.OIConstants;
 
 public class RobotContainer {
+    private static final double kDriveScale = 1.0;
+
     private final Camara m_camara = new Camara();
     private final DriveSubsystem m_robotDrive = new DriveSubsystem(m_camara);
+    private final Alignment m_alignment = new Alignment(m_robotDrive, m_camara);
     private final Angular m_angular = new Angular();
     private final Intake m_intake = new Intake();
     private final Shooter m_shooter = new Shooter();
     private final AsistedShooter m_asistedShooter = new AsistedShooter(m_camara);
     private final AuxMotor m_auxMotor = new AuxMotor();
-    private final CommandXboxController m_driverController =
-            new CommandXboxController(Constants.OperatorConstants.kDriverControllerPort);
+    // Control 0 = drivetrain (driver)
+    private final CommandXboxController m_driverController = new CommandXboxController(0);
+    // Control 1 = subsistemas (operator)
+    private final CommandXboxController m_operatorController = new CommandXboxController(1);
 
     // --- Angular / Intake ---
-    private boolean m_intakeToggleActive = false;
     private boolean m_intake100ToggleActive = false;
-    private boolean m_beltAuxComboToggleActive = false;
 
     // Angular jog (para calibración / reset 0)
     private boolean m_angularJogActive = false;
+
+    private void stopShooterAll() {
+        m_asistedShooter.stop();
+        m_shooter.stopManualShooter();
+    }
+
+    private void setAssistedShooterPercent(double percent) {
+        m_shooter.setAssistedShooterPercent(percent);
+    }
 
     public RobotContainer() {
         configureBindings();
@@ -41,115 +52,161 @@ public class RobotContainer {
         m_robotDrive.setDefaultCommand(
             new RunCommand(
                 () -> {
-                    double leftY = -MathUtil.applyDeadband(m_driverController.getLeftY(), OIConstants.kDriveDeadband);
-                    double leftX = -MathUtil.applyDeadband(m_driverController.getLeftX(), OIConstants.kDriveDeadband);
+                    double leftY = -MathUtil.applyDeadband(m_driverController.getLeftY(), OIConstants.kDriveDeadband) * kDriveScale;
+                    double leftX = -MathUtil.applyDeadband(m_driverController.getLeftX(), OIConstants.kDriveDeadband) * kDriveScale;
                     double transMag = Math.min(1.0, Math.hypot(leftY, leftX));
                     m_robotDrive.setLastTranslationMagnitude(transMag);
                     m_robotDrive.drive(
                         leftY,
                         leftX,
-                        m_robotDrive.getRotationForDrive(-MathUtil.applyDeadband(m_driverController.getRightX(), OIConstants.kDriveDeadband)),
+                        m_robotDrive.getRotationForDrive(-MathUtil.applyDeadband(m_driverController.getRightX(), OIConstants.kDriveDeadband) * kDriveScale),
                         true);
                 },
                 m_robotDrive));
     }
 
     private void configureBindings() {
+        // =========================
+        // Control 0 (Driver) - Drivetrain
+        // =========================
+
+        // Right Bumper: setX (bloqueo de ruedas)
+        m_driverController.rightBumper().whileTrue(
+            new RunCommand(() -> m_robotDrive.setX(), m_robotDrive)
+        );
+
+        // X: reset heading
+        m_driverController.x().onTrue(
+            new InstantCommand(() -> m_robotDrive.zeroHeading(), m_robotDrive)
+        );
+
+        // POVLeft: toggle AutoAim (solo si Tag1)
+        m_driverController.povLeft().onTrue(
+            new InstantCommand(() -> {
+                if (m_robotDrive.isAutoAimEnabled()) {
+                    m_robotDrive.setAutoAimEnabled(false);
+                } else if (m_camara.hasAutoAimTag()) {
+                    m_robotDrive.setAutoAimEnabled(true);
+                }
+            }, m_robotDrive)
+        );
+
+        // POVRight (while held): "Trench" align (1m away, centered, facing the closest visible trench tag)
+        m_driverController.povRight().whileTrue(
+            m_alignment.alignToTrenchOneMeter()
+        );
+
+        // =========================
+        // Control 1 (Operator) - Subsistemas
+        // =========================
+
         // --- Angular / Intake (CAN 54 + CAN 55) ---
 
-        // Intake: LT (toggle) usando intakeReverse() (la velocidad la ajustas en Intake)
-        // Si POVUp (100%) está activo, LT no lo apaga; solo define el "estado anterior".
-        m_driverController.leftTrigger().onTrue(
-            new InstantCommand(() -> {
-                m_intakeToggleActive = !m_intakeToggleActive;
-
-                // Si estamos en 100%, no tocar el motor; solo guardar el estado.
+        // Intake: LT (while held) usando intakeReverse() (la velocidad la ajustas en Intake)
+        // Si POVUp (100%) está activo, LT no debe pelear: no modifica el motor.
+        m_operatorController.leftTrigger().whileTrue(
+            new RunCommand(() -> {
                 if (m_intake100ToggleActive) {
                     return;
                 }
-
-                if (m_intakeToggleActive) {
-                    m_intake.intakeReverse();
-                } else {
-                    m_intake.stop();
+                m_intake.intakeReverse();
+            }, m_intake)
+        ).onFalse(
+            new InstantCommand(() -> {
+                if (m_intake100ToggleActive) {
+                    // Si sigue activo 100%, dejarlo prendido
+                    return;
                 }
+                m_intake.stop();
             }, m_intake)
         );
 
         // Intake: POVUp (toggle) 100% forward
-        // Al apagar, regresa al estado anterior: si LT estaba activo, vuelve a ~60%; si no, se apaga.
-        m_driverController.povUp().onTrue(
+        // Al apagar, se apaga el intake (LT ahora es while-held).
+        m_operatorController.povUp().onTrue(
             new InstantCommand(() -> {
                 m_intake100ToggleActive = !m_intake100ToggleActive;
                 if (m_intake100ToggleActive) {
                     // Prender 100% forward
                     m_intake.intakeFullReverse();
                 } else {
-                    // Apagar 100%: regresar a estado anterior (LT o apagado)
-                    if (m_intakeToggleActive) {
-                        m_intake.intakeReverse();
-                    } else {
-                        m_intake.stop();
-                    }
+                    // Apagar 100%
+                    m_intake.stop();
                 }
             }, m_intake)
         );
 
         // Intake: LB (while held) reverse
-        m_driverController.leftBumper().whileTrue(
+        m_operatorController.leftBumper().whileTrue(
             new RunCommand(() -> m_intake.intakeForward(), m_intake)
         ).onFalse(
             new InstantCommand(() -> m_intake.stop(), m_intake)
         );
 
         // Angular: A -> posición 0° (home)
-        m_driverController.a().onTrue(
+        m_operatorController.y().onTrue(
             new InstantCommand(() -> m_angular.irAPosicion((-360*5)), m_angular)
         );
 
-        // Angular: B -> toggle ciclo anti-atoradas (solo si ya está abajo)
-        m_driverController.b().onTrue(
-            new InstantCommand(() -> m_angular.toggleUnjamCycle(), m_angular)
+        // Angular: B -> auto-bajar hasta detectar stall y luego subir 2 rotaciones
+        m_operatorController.b().onTrue(
+            new InstantCommand(() -> m_angular.startAutoDownToStallAndBackoff(), m_angular)
+        );
+
+        // Angular: RB (one-shot) -> un ciclo anti-atoradas (solo si ya está abajo)
+        m_operatorController.rightBumper().onTrue(
+            new InstantCommand(() -> m_angular.setUnjamCycleEnabled(true), m_angular)
         );
 
         // Angular: Y -> abajo
-        m_driverController.y().onTrue(
-            new InstantCommand(() -> m_angular.irAPosicion(-(360.0 * 29)), m_angular)
+        m_operatorController.a().onTrue(
+            new InstantCommand(() -> m_angular.irAPosicion(-(360.0 * 31)), m_angular)
         );
 
         // Angular: START -> posición intermedia
-        m_driverController.start().onTrue(
+        m_operatorController.start().onTrue(
             new InstantCommand(() -> m_angular.irAPosicion(-(360.0 * 23)), m_angular)
         );
 
-        // Right Bumper: setX (bloqueo de ruedas)
-        m_driverController.rightBumper().whileTrue(
-            new RunCommand(() -> m_robotDrive.setX(), m_robotDrive)
-        );
-        m_driverController.x().onTrue(
-            new InstantCommand(() -> m_robotDrive.zeroHeading(), m_robotDrive)
-        );
-
-        m_driverController.rightTrigger().whileTrue(
+        m_operatorController.rightTrigger().whileTrue(
             new RunCommand(
                 () -> {
                     if (m_shooter.isEmergencyEnabled()) {
-                        m_asistedShooter.stop();
+                        stopShooterAll();
                         return;
                     }
+
+                    // Reglas:
+                    // 1) AutoAim OFF  -> shooter fijo -0.56
+                    // 2) AutoAim ON pero SIN tag o >4m -> shooter fijo -0.8
+                    // 3) AutoAim ON y tag válido (<=4m) -> AssistedShooter (fórmula)
+                    if (!m_robotDrive.isAutoAimEnabled()) {
+                        stopShooterAll();
+                        setAssistedShooterPercent(-0.56);
+                        return;
+                    }
+
+                    // AutoAim ON
+                    if (!m_camara.hasAutoAimTag() || m_camara.getAutoAimDistanceM() > 4.0) {
+                        stopShooterAll();
+                        setAssistedShooterPercent(-0.8);
+                        return;
+                    }
+
+                    // AutoAim ON + tag dentro de 4m
                     if (m_asistedShooter.canShootNow()) {
                         m_shooter.stopManualShooter();
-                        m_shooter.setAssistedShooterPercent(m_asistedShooter.getDesiredPercent());
+                        setAssistedShooterPercent(m_asistedShooter.getDesiredPercent());
                     } else {
-                        m_asistedShooter.stop();
-                        m_shooter.startManualShooter();
+                        // Si por alguna razón canShootNow() no deja (distancia 0, etc.), usar el fallback fuerte
+                        stopShooterAll();
+                        setAssistedShooterPercent(-0.8);
                     }
                 },
                 m_asistedShooter, m_shooter)
         ).onFalse(
             new InstantCommand(() -> {
-                m_asistedShooter.stop();
-                m_shooter.stopManualShooter();
+                stopShooterAll();
             }, m_asistedShooter, m_shooter)
         );
         InstantCommand toggleEmergencyShooterCmd = new InstantCommand(() -> {
@@ -157,34 +214,30 @@ public class RobotContainer {
             m_shooter.toggleEmergencyShooter();
         }, m_shooter, m_asistedShooter);
 
-        m_driverController.leftStick().onTrue(toggleEmergencyShooterCmd);
-        m_driverController.rightStick().onTrue(toggleEmergencyShooterCmd);
+        m_operatorController.leftStick().onTrue(toggleEmergencyShooterCmd);
+        m_operatorController.rightStick().onTrue(toggleEmergencyShooterCmd);
 
-        // POVDown: toggle combinado Banda + AuxMotor
-        m_driverController.povDown().onTrue(
+        // X (while held): Banda + AuxMotor
+        m_operatorController.x().whileTrue(
+            new RunCommand(() -> {
+                m_shooter.startBelt();
+                m_auxMotor.startReverseAux();
+            }, m_shooter, m_auxMotor)
+        ).onFalse(
             new InstantCommand(() -> {
-                m_beltAuxComboToggleActive = !m_beltAuxComboToggleActive;
-
-                if (m_beltAuxComboToggleActive) {
-                    m_shooter.startBelt();
-                    m_auxMotor.startReverse50();
-                } else {
-                    m_shooter.stopBelt();
-                    m_auxMotor.stop();
-                }
+                m_shooter.stopBelt();
+                m_auxMotor.stop();
             }, m_shooter, m_auxMotor)
         );
 
-        // POVRight: ya no se usa (se combinó en POVDown)
-
         // POVRight (while held): Angular open-loop 20% (SIN PID) para calibración
         // Mientras se sostiene, mueve el Angular; al soltar, lo apaga (se queda donde está).
-        m_driverController.povRight().whileTrue(
+        m_operatorController.povRight().whileTrue(
             new RunCommand(() -> {
                 if (!m_angularJogActive) {
                     m_angularJogActive = true;
                 }
-                m_angular.setOpenLoopPercent(0.20);
+                m_angular.setOpenLoopPercent(0.30);
             }, m_angular)
         ).onFalse(
             new InstantCommand(() -> {
@@ -195,18 +248,8 @@ public class RobotContainer {
 
         // Back button: tomar esta posición actual como 0 del Angular (CAN 54)
         // Nota: 'back()' existe en CommandXboxController para Xbox (View/Back).
-        m_driverController.back().onTrue(
+        m_operatorController.back().onTrue(
             new InstantCommand(() -> m_angular.resetEncoder(), m_angular)
-        );
-
-        m_driverController.povLeft().onTrue(
-            new InstantCommand(() -> {
-                if (m_robotDrive.isAutoAimEnabled()) {
-                    m_robotDrive.setAutoAimEnabled(false);
-                } else if (m_camara.hasTag1()) {
-                    m_robotDrive.setAutoAimEnabled(true);
-                }
-            }, m_robotDrive)
         );
     }
 

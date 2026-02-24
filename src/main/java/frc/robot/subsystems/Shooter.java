@@ -13,37 +13,35 @@ public class Shooter extends SubsystemBase {
 
 	private boolean m_emergencyEnabled = false;
 	private static final double kEmergencyPercent = -0.5;
+	private static final double kManualShooterPercent = -1.0;
+	private static final double kBeltPercent = 0.5;
 	private boolean m_assistedActive = false;
 
 	public Shooter() {
 		m_shooterEncoder = m_shooterMotor51.getEncoder();
 	}
 
-	public void startManualShooter() {
-		m_assistedActive = false;
+	private void setShooterPercentInternal(double requestedPercent) {
 		if (m_emergencyEnabled) {
 			m_shooterMotor51.set(kEmergencyPercent);
 			return;
 		}
-		m_shooterMotor51.set(-0.8);
+		m_shooterMotor51.set(requestedPercent);
+	}
+
+	public void startManualShooter() {
+		m_assistedActive = false;
+		setShooterPercentInternal(kManualShooterPercent);
 	}
 
 	public void setAssistedShooterPercent(double percent) {
 		m_assistedActive = true;
-		if (m_emergencyEnabled) {
-			m_shooterMotor51.set(kEmergencyPercent);
-			return;
-		}
-		m_shooterMotor51.set(percent);
+		setShooterPercentInternal(percent);
 	}
 
 	public void stopManualShooter() {
 		m_assistedActive = false;
-		if (m_emergencyEnabled) {
-			m_shooterMotor51.set(kEmergencyPercent);
-			return;
-		}
-		m_shooterMotor51.set(0.0);
+		setShooterPercentInternal(0.0);
 	}
 
 	public void toggleEmergencyShooter() {
@@ -57,6 +55,8 @@ public class Shooter extends SubsystemBase {
 
 	public void disableEmergency() {
 		m_emergencyEnabled = false;
+		// El usuario pidió que al desactivar emergencia se apague el motor.
+		m_shooterMotor51.set(0.0);
 	}
 
 	public boolean isAssistedActive() {
@@ -64,7 +64,7 @@ public class Shooter extends SubsystemBase {
 	}
 
 	public void startBelt() {
-		m_beltMotor53.set(0.5);
+		m_beltMotor53.set(kBeltPercent);
 	}
 
 	public void stopBelt() {

@@ -5,25 +5,26 @@ import com.revrobotics.spark.SparkMax;
 import com.revrobotics.spark.SparkLowLevel.MotorType;
 
 public class Intake extends SubsystemBase {
-	private final SparkMax m_intakeMotor = new SparkMax(55, MotorType.kBrushless);
+	private static final int kIntakeMotorCanId = 55;
+	private static final double kReversePercent = -0.6;
+	private static final double kFullReversePercent = -1.0;
+	private static final double kForwardPercent = 0.4;
+
+	private final SparkMax m_intakeMotor = new SparkMax(kIntakeMotorCanId, MotorType.kBrushless);
 
 	public void intakeReverse() {
-	m_intakeMotor.set(-0.6);
+		m_intakeMotor.set(kReversePercent);
 	}
 
 	public void intakeFullReverse() {
-	m_intakeMotor.set(-1.0);
+		m_intakeMotor.set(kFullReversePercent);
 	}
 
 	public void intakeForward() {
-	m_intakeMotor.set(0.4);
-	}
-
-	public void intakeForward20() {
-		m_intakeMotor.set(0.2);
+		m_intakeMotor.set(kForwardPercent);
 	}
 
 	public void stop() {
-	m_intakeMotor.set(0.0);
+		m_intakeMotor.set(0.0);
 	}
 }

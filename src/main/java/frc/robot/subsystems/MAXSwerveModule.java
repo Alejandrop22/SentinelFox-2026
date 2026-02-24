@@ -51,14 +51,6 @@ public class MAXSwerveModule {
     m_drivingEncoder.setPosition(0);
   }
 
-  public double getRawTurningEncoderPosition() {
-    return m_turningEncoder.getPosition();
-  }
-
-  public double getEffectiveTurningEncoderPosition() {
-    return m_turningEncoder.getPosition();
-  }
-
   public SwerveModuleState getState() {
     return new SwerveModuleState(m_drivingEncoder.getVelocity(),
         new Rotation2d(m_turningEncoder.getPosition() - m_chassisAngularOffset));

@@ -19,20 +19,23 @@ import edu.wpi.first.wpilibj.ADIS16470_IMU.IMUAxis;
  * constants are needed, to reduce verbosity.
  */
 public final class Constants {
-  public static class OperatorConstants {
-    public static final int kDriverControllerPort = 0;
-  }
-
   public static final class DriveConstants {
     // Driving Parameters - Note that these are not the maximum capable speeds of
     // the robot, rather the allowed maximum speeds
-    public static final double kMaxSpeedMetersPerSecond = 4.8 * 0.5;
+    /** Velocidad física aproximada del swerve (sin limitador de driver). */
+    public static final double kPhysicalMaxSpeedMetersPerSecond = 4.8;
+
+    /** Limitador para que el driver no maneje al 100% (por ejemplo, modo novato). */
+    public static final double kDriverSpeedLimit = 0.5;
+
+    /** Velocidad máxima permitida = física * limitador. */
+    public static final double kMaxSpeedMetersPerSecond = kPhysicalMaxSpeedMetersPerSecond * kDriverSpeedLimit;
     public static final double kMaxAngularSpeed = 2 * Math.PI; // radians per second
 
     // Chassis configuration
-    public static final double kTrackWidth = Units.inchesToMeters(24.5);
+    public static final double kTrackWidth = Units.inchesToMeters(26);
     // Distance between centers of right and left wheels on robot
-    public static final double kWheelBase = Units.inchesToMeters(13.5);
+    public static final double kWheelBase = Units.inchesToMeters(26);
     // Distance between front and back wheels on robot
     public static final SwerveDriveKinematics kDriveKinematics = new SwerveDriveKinematics(
         new Translation2d(kWheelBase / 2, kTrackWidth / 2),

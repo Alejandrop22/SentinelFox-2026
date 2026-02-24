@@ -13,29 +13,31 @@ public final class Configs {
         public static final SparkMaxConfig turningConfig = new SparkMaxConfig();
 
         static {
-            // Use module constants to calculate conversion factors and feed forward gain.
+                        // Conversion factors / feedforward computed from ModuleConstants.
             double drivingFactor = ModuleConstants.kWheelDiameterMeters * Math.PI
                     / ModuleConstants.kDrivingMotorReduction;
             double turningFactor = 2 * Math.PI;
-            double nominalVoltage = 12.0;
-            double drivingVelocityFeedForward = nominalVoltage / ModuleConstants.kDriveWheelFreeSpeedRps;
+                        final double kNominalVoltage = 12.0;
+                        final int kDrivingCurrentLimitA = 50;
+                        final int kTurningCurrentLimitA = 20;
+                        double drivingVelocityFeedForward = kNominalVoltage / ModuleConstants.kDriveWheelFreeSpeedRps;
 
             drivingConfig
                     .idleMode(IdleMode.kBrake)
-                    .smartCurrentLimit(50);
+                    .smartCurrentLimit(kDrivingCurrentLimitA);
             drivingConfig.encoder
                     .positionConversionFactor(drivingFactor) // meters
                     .velocityConversionFactor(drivingFactor / 60.0); // meters per second
             drivingConfig.closedLoop
                     .feedbackSensor(FeedbackSensor.kPrimaryEncoder)
-                    // These are example gains you may need to them for your own robot!
+                    // Ganancias iniciales: ajustar en cancha.
                     .pid(0.04, 0, 0)
                     .outputRange(-1, 1)
                     .feedForward.kV(drivingVelocityFeedForward);
 
             turningConfig
                     .idleMode(IdleMode.kBrake)
-                    .smartCurrentLimit(20);
+                    .smartCurrentLimit(kTurningCurrentLimitA);
 
             turningConfig.absoluteEncoder
                     // Invert the turning encoder, since the output shaft rotates in the opposite
@@ -48,7 +50,7 @@ public final class Configs {
 
             turningConfig.closedLoop
                     .feedbackSensor(FeedbackSensor.kAbsoluteEncoder)
-                    // These are example gains you may need to them for your own robot!
+                                        // Ganancias iniciales: ajustar en cancha.
                     .pid(1, 0, 0)
                     .outputRange(-1, 1)
                     // Enable PID wrap around for the turning motor. This will allow the PID
