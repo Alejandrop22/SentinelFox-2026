@@ -33,19 +33,13 @@ public class DriveSubsystem extends SubsystemBase {
   private static final double kAutoAimDeadbandDeg = 1.5;
   private static final double kAutoAimMaxRotCmd = 0.35;
 
-  // Lead compensation (tuneable)
   private static final double kMaxLeadDistanceMeters = 3.0;
   private static final double kMinLeadDistanceMeters = 0.30;
-  // Tiempo de vuelo "aprox" del tiro (s). Ajusta en práctica.
   private static final double kShotFlightTimeSec = 0.35;
-  // Extra agresividad por aceleración lateral (s por (m/s^2)). Empieza bajo.
   private static final double kLeadAccelGainSecPerMps2 = 0.05;
-  // Limites para evitar cosas raras.
   private static final double kMaxEffectiveFlightTimeSec = 0.70;
-  // Limitar el lead total por seguridad.
   private static final double kMaxLeadDeg = 15.0;
 
-  // Estimación simple de aceleración lateral (robot-relative) para hacer el lead más agresivo.
   private double m_prevVyMps = 0.0;
   private double m_prevVyTimestampSec = Timer.getFPGATimestamp();
   private double m_estLatAccelMps2 = 0.0;
@@ -142,16 +136,14 @@ public class DriveSubsystem extends SubsystemBase {
     SmartDashboard.putNumber("AutoAim/TagId", m_camara.getAutoAimTagId());
     double yawErrorDeg = MathUtil.inputModulus(m_camara.getAutoAimYawDeg(), -180.0, 180.0);
 
-    // --- Lead compensation por movimiento lateral ---
     double dist = m_camara.getAutoAimDistanceM();
     double yawLeadDeg = 0.0;
     boolean leadActive = false;
     double tEffSec = kShotFlightTimeSec;
     if (dist > kMinLeadDistanceMeters && dist <= kMaxLeadDistanceMeters) {
       ChassisSpeeds speeds = getLastChassisSpeeds();
-      double vLat = speeds.vyMetersPerSecond; // robot-relative +izquierda
+      double vLat = speeds.vyMetersPerSecond;
 
-      // Estimar aceleración lateral aLat = d(vy)/dt (sin IMU; solo cambio en comando/estimación).
       double now = Timer.getFPGATimestamp();
       double dt = now - m_prevVyTimestampSec;
       if (dt > 1e-3 && dt < 0.25) {
@@ -160,19 +152,14 @@ public class DriveSubsystem extends SubsystemBase {
       m_prevVyMps = vLat;
       m_prevVyTimestampSec = now;
 
-      // Hacer el lead "más agresivo" cuando hay aceleración (cambios rápidos de velocidad lateral).
       tEffSec = kShotFlightTimeSec + (kLeadAccelGainSecPerMps2 * Math.abs(m_estLatAccelMps2));
       tEffSec = MathUtil.clamp(tEffSec, 0.0, kMaxEffectiveFlightTimeSec);
 
-      // Aproximación: ángulo = atan2(desplazamiento lateral, distancia)
-      // desplazamiento lateral ~= vLat * t_flight
       yawLeadDeg = Math.toDegrees(Math.atan2(vLat * tEffSec, dist));
       yawLeadDeg = MathUtil.clamp(yawLeadDeg, -kMaxLeadDeg, kMaxLeadDeg);
       leadActive = true;
     }
 
-    // Si vamos +izquierda (vy>0), necesitamos "apuntar" un poco a la izquierda del objetivo
-    // (restar al error de yaw de la cámara para cancelar el movimiento). Si se invierte, ajusta el signo aquí.
     double yawErrorWithLeadDeg = yawErrorDeg + yawLeadDeg;
     double rotCmd = 0.0;
     if (Math.abs(yawErrorWithLeadDeg) > kAutoAimDeadbandDeg) {
