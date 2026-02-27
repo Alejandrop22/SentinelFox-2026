@@ -13,7 +13,7 @@ public class Camara extends SubsystemBase {
     // =========================
     // AutoAim tags: tags válidos para apuntar (elegimos el más cercano en cada frame).
     // =========================
-    private static final int[] kAutoAimTagIds = new int[] {8, 5, 4, 3, 2, 11, 9, 10, 18, 19, 20, 21, 24, 25, 26, 27};
+    private static final int[] kAutoAimTagIds = new int[] {8, 5, 4, 3, 11, 9, 10, 18, 19, 20, 21, 24, 25, 26, 27};
 
     private boolean has_autoaim_tag;
     private int autoaim_tag_id;
@@ -24,7 +24,7 @@ public class Camara extends SubsystemBase {
     // "Trench" tags: IDs que se usan para alinear el robot en esa zona.
     // =========================
     // Nota: lo dejamos aquí para que el lector entienda que estos tags existen con un propósito de juego.
-    private static final int[] kTrenchTagIds = new int[] {7, 6, 12, 1, 17, 26, 22, 23};
+    private static final int[] kTrenchTagIds = new int[] {7, 6, 12, 1, 17, 26, 22, 23, 2};
 
     private boolean has_trench_tag;
     private int trench_tag_id;
@@ -38,7 +38,7 @@ public class Camara extends SubsystemBase {
      * Si la cámara está físicamente a la derecha del centro del robot, normalmente necesitarás un offset NEGATIVO
      * (apunta un poco más a la izquierda) pero depende de tu montaje y del eje de yaw; ajusta en la práctica.
      */
-    private static final double kCameraYawOffsetDeg = 5.0;
+    private static final double kCameraYawOffsetDeg = 15.0;
 
     /** True si se ve el tag elegido para AutoAim (cualquiera de kAutoAimTagIds). */
     public boolean hasAutoAimTag() {

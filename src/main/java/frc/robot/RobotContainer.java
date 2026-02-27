@@ -54,12 +54,12 @@ public class RobotContainer {
                 () -> {
                     double leftY = -MathUtil.applyDeadband(m_driverController.getLeftY(), OIConstants.kDriveDeadband) * kDriveScale;
                     double leftX = -MathUtil.applyDeadband(m_driverController.getLeftX(), OIConstants.kDriveDeadband) * kDriveScale;
-                    double transMag = Math.min(1.0, Math.hypot(leftY, leftX));
-                    m_robotDrive.setLastTranslationMagnitude(transMag);
+                    double rot = -MathUtil.applyDeadband(m_driverController.getRightX(), OIConstants.kDriveDeadband) * kDriveScale;
+                    double rotWithAutoAim = m_robotDrive.getRotationForDrive(rot);
                     m_robotDrive.drive(
                         leftY,
                         leftX,
-                        m_robotDrive.getRotationForDrive(-MathUtil.applyDeadband(m_driverController.getRightX(), OIConstants.kDriveDeadband) * kDriveScale),
+                        rotWithAutoAim,
                         true);
                 },
                 m_robotDrive));
@@ -94,6 +94,62 @@ public class RobotContainer {
         // POVRight (while held): "Trench" align (1m away, centered, facing the closest visible trench tag)
         m_driverController.povRight().whileTrue(
             m_alignment.alignToTrenchOneMeter()
+        );
+
+        // LT (while held): Shooter (manual/assisted) para Control 0
+        m_driverController.leftTrigger().whileTrue(
+            new RunCommand(
+                () -> {
+                    if (m_shooter.isEmergencyEnabled()) {
+                        stopShooterAll();
+                        return;
+                    }
+
+                    // Reglas:
+                    // 1) AutoAim OFF  -> shooter fijo -0.56
+                    // 2) AutoAim ON pero SIN tag o >4m -> shooter fijo -0.8
+                    // 3) AutoAim ON y tag válido (<=4m) -> AssistedShooter (fórmula)
+                    if (!m_robotDrive.isAutoAimEnabled()) {
+                        stopShooterAll();
+                        setAssistedShooterPercent(-0.56);
+                        return;
+                    }
+
+                    // AutoAim ON
+                    if (!m_camara.hasAutoAimTag() || m_camara.getAutoAimDistanceM() > 4.0) {
+                        stopShooterAll();
+                        setAssistedShooterPercent(-0.8);
+                        return;
+                    }
+
+                    // AutoAim ON + tag dentro de 4m
+                    if (m_asistedShooter.canShootNow()) {
+                        m_shooter.stopManualShooter();
+                        setAssistedShooterPercent(m_asistedShooter.getDesiredPercent());
+                    } else {
+                        // Si por alguna razón canShootNow() no deja (distancia 0, etc.), usar el fallback fuerte
+                        stopShooterAll();
+                        setAssistedShooterPercent(-0.8);
+                    }
+                },
+                m_asistedShooter, m_shooter)
+        ).onFalse(
+            new InstantCommand(() -> {
+                stopShooterAll();
+            }, m_asistedShooter, m_shooter)
+        );
+
+        // B (while held): Banda + AuxMotor para Control 0
+        m_driverController.b().whileTrue(
+            new RunCommand(() -> {
+                m_shooter.startBelt();
+                m_auxMotor.startReverseAux();
+            }, m_shooter, m_auxMotor)
+        ).onFalse(
+            new InstantCommand(() -> {
+                m_shooter.stopBelt();
+                m_auxMotor.stop();
+            }, m_shooter, m_auxMotor)
         );
 
         // =========================
