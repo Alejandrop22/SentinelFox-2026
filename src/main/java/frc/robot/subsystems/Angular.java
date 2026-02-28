@@ -65,7 +65,7 @@ public class Angular extends SubsystemBase {
   private static final double kStallCurrentA = 35.0;
   private static final double kStallVelocityDegPerSec = 50.0;
   private static final double kStallDebounceSec = 0.12;
-  private static final double kAutoBackoffRotations = 5.0; // subir N rotaciones (después de detectar stall)
+  private static final double kAutoBackoffRotations = 3.0; // subir N rotaciones (después de detectar stall)
 
   public Angular() {
     SparkMaxConfig config = new SparkMaxConfig();

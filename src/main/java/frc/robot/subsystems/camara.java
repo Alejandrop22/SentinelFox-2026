@@ -38,7 +38,7 @@ public class Camara extends SubsystemBase {
      * Si la cámara está físicamente a la derecha del centro del robot, normalmente necesitarás un offset NEGATIVO
      * (apunta un poco más a la izquierda) pero depende de tu montaje y del eje de yaw; ajusta en la práctica.
      */
-    private static final double kCameraYawOffsetDeg = 15.0;
+    private static final double kCameraYawOffsetDeg = 0.0;
 
     /** True si se ve el tag elegido para AutoAim (cualquiera de kAutoAimTagIds). */
     public boolean hasAutoAimTag() {

@@ -11,6 +11,7 @@ import edu.wpi.first.math.kinematics.SwerveDriveKinematics;
 import edu.wpi.first.math.kinematics.SwerveDriveOdometry;
 import edu.wpi.first.math.kinematics.SwerveModulePosition;
 import edu.wpi.first.math.kinematics.SwerveModuleState;
+import edu.wpi.first.math.filter.SlewRateLimiter;
 import edu.wpi.first.math.util.Units;
 import edu.wpi.first.wpilibj.ADIS16470_IMU;
 import edu.wpi.first.wpilibj.Timer;
@@ -27,10 +28,10 @@ public class DriveSubsystem extends SubsystemBase {
     private double m_lastTranslationMagnitude = 0.0;
     private final Camara m_camara;
     private boolean m_autoAimEnabled = false;
-    private static final double kAutoAimKp = 9.0;
-    private static final double kAutoAimKd = 0.65;
-    private static final double kAutoAimDeadbandDeg = 0.8;
-    private static final double kAutoAimMaxRotCmd = 1.0;
+    private static final double kAutoAimKp = 7.5;
+    private static final double kAutoAimKd = 0.1;
+    private static final double kAutoAimDeadbandDeg = 2.5;
+    private static final double kAutoAimMaxRotCmd = 0.50;
     private static final double kMaxLeadDistanceMeters = 4.0;
     private static final double kMinLeadDistanceMeters = 0.25;
     private static final double kShotFlightTimeSec = 0.60;
@@ -41,6 +42,19 @@ public class DriveSubsystem extends SubsystemBase {
     private static final double kAccelGToMps2 = 9.80665;
     private double m_prevYawErrorRad = 0.0;
     private double m_prevYawTimestampSec = Timer.getFPGATimestamp();
+
+    // Estado para estimar aceleración lateral (dv/dt) y mejorar el lead.
+    private double m_prevVLatMps = 0.0;
+    private double m_prevVLatTimestampSec = Timer.getFPGATimestamp();
+
+    // Filtros para quitar el "steppy" del lead (especialmente en vy y dv/dt).
+    private double m_vLatFiltMps = 0.0;
+    private double m_aLatFiltMps2 = 0.0;
+
+    // Suaviza el comando de rotación en AutoAim para evitar que "se trabe" por saltos.
+    // Un valor de 6 (1/s) significa que puede cambiar de -1 a 1 en ~0.33s.
+    private final SlewRateLimiter m_autoAimRotLimiter = new SlewRateLimiter(6.0);
+
     private ChassisSpeeds m_lastChassisSpeeds = new ChassisSpeeds();
 
     private final MAXSwerveModule m_frontLeft = new MAXSwerveModule(
@@ -108,6 +122,11 @@ public class DriveSubsystem extends SubsystemBase {
             clearRotationOverride();
             m_prevYawErrorRad = 0.0;
             m_prevYawTimestampSec = Timer.getFPGATimestamp();
+            m_autoAimRotLimiter.reset(0.0);
+            m_prevVLatMps = 0.0;
+            m_prevVLatTimestampSec = Timer.getFPGATimestamp();
+            m_vLatFiltMps = 0.0;
+            m_aLatFiltMps2 = 0.0;
         }
     }
 
@@ -137,6 +156,13 @@ public class DriveSubsystem extends SubsystemBase {
         SmartDashboard.putNumber("AutoAim/YawErrorDotRad", 0.0);
         SmartDashboard.putNumber("AutoAim/OmegaCmdRadPerSec", 0.0);
         SmartDashboard.putNumber("AutoAim/RotCmd", 0.0);
+        SmartDashboard.putNumber("AutoAim/RotCmdSmoothed", 0.0);
+
+        // Publicar defaults de tuning para que aparezcan siempre.
+        SmartDashboard.putNumber("AutoAim/Tuning/Kp", kAutoAimKp);
+        SmartDashboard.putNumber("AutoAim/Tuning/Kd", kAutoAimKd);
+        SmartDashboard.putNumber("AutoAim/Tuning/DeadbandDeg", kAutoAimDeadbandDeg);
+        SmartDashboard.putNumber("AutoAim/Tuning/MaxRotCmd", kAutoAimMaxRotCmd);
 
         if (!m_autoAimEnabled) {
             SmartDashboard.putBoolean("AutoAim/Enabled", false);
@@ -148,6 +174,11 @@ public class DriveSubsystem extends SubsystemBase {
             setRotationOverride(0.0);
             m_prevYawErrorRad = 0.0;
             m_prevYawTimestampSec = Timer.getFPGATimestamp();
+            // Resetear estado de aceleración lateral para evitar un pico al recuperar el tag.
+            m_prevVLatMps = 0.0;
+            m_prevVLatTimestampSec = Timer.getFPGATimestamp();
+            m_vLatFiltMps = 0.0;
+            m_aLatFiltMps2 = 0.0;
             SmartDashboard.putBoolean("AutoAim/TrackingAutoAimTag", false);
             return;
         }
@@ -169,44 +200,89 @@ public class DriveSubsystem extends SubsystemBase {
 
         ChassisSpeeds speeds = getLastChassisSpeeds();
         double vLat = speeds.vyMetersPerSecond;
+        double now = Timer.getFPGATimestamp();
+
+        // Estimar aceleración lateral (m/s^2) desde el cambio de vy.
+        // Se clampa para evitar que el ruido del drivetrain se convierta en lead enorme.
+        double dtV = Math.max(1e-3, now - m_prevVLatTimestampSec);
+        double aLatRaw = (vLat - m_prevVLatMps) / dtV;
+
+        final double kMaxALatMps2 = 6.0;
+        double aLat = MathUtil.clamp(aLatRaw, -kMaxALatMps2, kMaxALatMps2);
+
+        // Filtro IIR simple (0..1): más alto = más rápido pero puede verse "steppy".
+        double leadFilterAlpha = SmartDashboard.getNumber("AutoAim/Lead/FilterAlpha", 0.35);
+        leadFilterAlpha = MathUtil.clamp(leadFilterAlpha, 0.05, 1.0);
+        m_vLatFiltMps += leadFilterAlpha * (vLat - m_vLatFiltMps);
+        m_aLatFiltMps2 += leadFilterAlpha * (aLat - m_aLatFiltMps2);
+
+        m_prevVLatMps = vLat;
+        m_prevVLatTimestampSec = now;
         double omegaFF = 0.0;
         double leadRad = 0.0;
         double leadMeters = 0.0;
         boolean leadActive = false;
 
-        if (dist > kMinLeadDistanceMeters && dist <= kMaxLeadDistanceMeters) {
-            // Lead dinámico: desplazamiento lateral durante el tiempo de vuelo efectivo.
-            // vLat (m/s) * tEffSec (s) -> metros. Luego atan2(m, dist) -> rad.
-            leadMeters = vLat * tEffSec;
+    // Lead settings (tuneables pero seguros por default)
+    final double kLeadMinVLatMps = SmartDashboard.getNumber("AutoAim/Lead/MinVLatMps", 0.10);
+    final double kLeadMaxDeg = SmartDashboard.getNumber("AutoAim/Lead/MaxDeg", 18.0);
+    final double kLeadMaxRad = Math.toRadians(kLeadMaxDeg);
+
+    // Exageración: multiplica cuánto compensamos el lead (esto es lo que pedís).
+    // Si a máxima strafe seguís "cayendo" ~1m, subí esto (p.ej. 1.5 -> 2.5).
+    double leadGain = SmartDashboard.getNumber("AutoAim/Lead/Gain", 2.0);
+    leadGain = MathUtil.clamp(leadGain, 0.0, 5.0);
+
+        if (dist > kMinLeadDistanceMeters && dist <= kMaxLeadDistanceMeters && Math.abs(m_vLatFiltMps) > kLeadMinVLatMps) {
+            // Lead dinámico (velocidad + aceleración):
+            //   d = v*t + 0.5*a*t^2
+            // Esto mejora la sensación de "en tiempo real" cuando el strafe cambia.
+            leadMeters = ((m_vLatFiltMps * tEffSec) + (0.5 * m_aLatFiltMps2 * tEffSec * tEffSec)) * leadGain;
 
             // Sumamos el offset al error (objetivo fantasma). Si vLat>0, el objetivo
             // fantasma queda "adelantado" al lado contrario para compensar.
             leadRad = Math.atan2(-leadMeters, Math.max(dist, 1e-6));
+            leadRad = MathUtil.clamp(leadRad, -kLeadMaxRad, kLeadMaxRad);
 
             // Mantener feedforward existente (opcional), pero ahora puede coexistir con leadRad.
-            omegaFF = (vLat / dist) * kAutoAimFeedforwardGain;
+            omegaFF = (m_vLatFiltMps / dist) * kAutoAimFeedforwardGain;
             leadActive = true;
         }
 
+        // Permite tuning en vivo desde Dashboard (si no existen, usa defaults constantes)
+        double kp = SmartDashboard.getNumber("AutoAim/Tuning/Kp", kAutoAimKp);
+        double kd = SmartDashboard.getNumber("AutoAim/Tuning/Kd", kAutoAimKd);
+        double deadbandDeg = SmartDashboard.getNumber("AutoAim/Tuning/DeadbandDeg", kAutoAimDeadbandDeg);
+        double maxRotCmd = SmartDashboard.getNumber("AutoAim/Tuning/MaxRotCmd", kAutoAimMaxRotCmd);
+
         double yawErrorRad = Math.toRadians(yawErrorDeg);
         double yawErrorRadAdjusted = yawErrorRad + leadRad;
-        double now = Timer.getFPGATimestamp();
         double dt = Math.max(1e-3, now - m_prevYawTimestampSec);
         double yawErrorDotRad = (yawErrorRadAdjusted - m_prevYawErrorRad) / dt;
 
         m_prevYawErrorRad = yawErrorRadAdjusted;
         m_prevYawTimestampSec = now;
 
-        double omegaCmdRadPerSec = (kAutoAimKp * yawErrorRadAdjusted) + (kAutoAimKd * yawErrorDotRad) + omegaFF;
+        // Damping con gyro (mucho menos ruidoso que derivar la visión):
+        // gyroRateDegPerSec es la velocidad real de giro; en rad/s.
+        double gyroRateRadPerSec = Math.toRadians(gyroRateDegPerSec);
+        double omegaCmdRadPerSec = (kp * yawErrorRadAdjusted) - (kd * gyroRateRadPerSec) + omegaFF;
         double rotCmd = 0.0;
 
-        if (Math.abs(yawErrorDeg) > kAutoAimDeadbandDeg) {
+        if (Math.abs(yawErrorDeg) > deadbandDeg) {
             rotCmd = MathUtil.clamp(omegaCmdRadPerSec / DriveConstants.kMaxAngularSpeed,
-                -kAutoAimMaxRotCmd,
-                kAutoAimMaxRotCmd);
+                -maxRotCmd,
+                maxRotCmd);
+        } else {
+            // Si estamos dentro del deadband, "congela" el estado del derivativo para que no
+            // se acumule y luego pegue un giro fuerte cuando vuelva a salir.
+            m_prevYawErrorRad = yawErrorRadAdjusted;
+            m_prevYawTimestampSec = now;
         }
 
-        setRotationOverride(rotCmd);
+        // Suavizar (anti-jerk) para que al entrar/salir del deadband no pegue saltos.
+        double rotCmdSmoothed = m_autoAimRotLimiter.calculate(rotCmd);
+        setRotationOverride(rotCmdSmoothed);
         SmartDashboard.putNumber("AutoAim/YawErrorDegRaw", yawErrorDegRaw);
         SmartDashboard.putNumber("AutoAim/YawErrorDeg", yawErrorDeg);
         SmartDashboard.putNumber("AutoAim/YawErrorRad", yawErrorRad);
@@ -217,13 +293,31 @@ public class DriveSubsystem extends SubsystemBase {
         SmartDashboard.putNumber("AutoAim/DistanceM", dist);
         SmartDashboard.putNumber("AutoAim/VLatMps", vLat);
         SmartDashboard.putNumber("AutoAim/AccelLatMps2", accelLatMps2);
+    SmartDashboard.putNumber("AutoAim/VLatFiltMps", m_vLatFiltMps);
+    SmartDashboard.putNumber("AutoAim/ALatMps2", m_aLatFiltMps2);
+    SmartDashboard.putNumber("AutoAim/ALatRawMps2", aLatRaw);
+    SmartDashboard.putNumber("AutoAim/LeadMetersVel", m_vLatFiltMps * tEffSec);
+    SmartDashboard.putNumber("AutoAim/LeadMetersAccel", 0.5 * m_aLatFiltMps2 * tEffSec * tEffSec);
+        SmartDashboard.putNumber("AutoAim/LeadMetersTotal", leadMeters);
         SmartDashboard.putNumber("AutoAim/LeadTEffSec", tEffSec);
         SmartDashboard.putNumber("AutoAim/LeadMeters", leadMeters);
         SmartDashboard.putNumber("AutoAim/LeadRad", leadRad);
+        SmartDashboard.putNumber("AutoAim/LeadMaxDeg", kLeadMaxDeg);
+        SmartDashboard.putNumber("AutoAim/LeadMinVLatMps", kLeadMinVLatMps);
+        SmartDashboard.putNumber("AutoAim/LeadMaxALatMps2", kMaxALatMps2);
+    SmartDashboard.putNumber("AutoAim/LeadGain", leadGain);
+    SmartDashboard.putNumber("AutoAim/LeadFilterAlpha", leadFilterAlpha);
         SmartDashboard.putNumber("AutoAim/OmegaFFRadPerSec", omegaFF);
         SmartDashboard.putNumber("AutoAim/YawErrorDotRad", yawErrorDotRad);
         SmartDashboard.putNumber("AutoAim/OmegaCmdRadPerSec", omegaCmdRadPerSec);
         SmartDashboard.putNumber("AutoAim/RotCmd", rotCmd);
+        SmartDashboard.putNumber("AutoAim/RotCmdSmoothed", rotCmdSmoothed);
+
+        // Volver a publicar los tuning actuales (con lo que se está usando)
+        SmartDashboard.putNumber("AutoAim/Tuning/Kp", kp);
+        SmartDashboard.putNumber("AutoAim/Tuning/Kd", kd);
+        SmartDashboard.putNumber("AutoAim/Tuning/DeadbandDeg", deadbandDeg);
+        SmartDashboard.putNumber("AutoAim/Tuning/MaxRotCmd", maxRotCmd);
     }
 
     public Pose2d getPose() {

@@ -36,7 +36,7 @@ public class AsistedShooter extends SubsystemBase {
 	// Ajuste global (multiplica toda la curva). Si "en general va mas rapido", baja este numero.
 	// Lo publicamos a SmartDashboard para poder tunear en la cancha.
 	private static final String kShootScaleKey = "AssistShooter/ShootScale";
-	private static final double kDefaultShootScale = 0.85;
+	private static final double kDefaultShootScale = 1;
 
 	public AsistedShooter(Camara camara) {
 		m_camara = camara;

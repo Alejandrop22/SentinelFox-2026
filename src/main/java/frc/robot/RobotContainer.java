@@ -43,8 +43,17 @@ public class RobotContainer {
     }
 
     private void setAssistedShooterPercent(double percent) {
-        m_shooter.setAssistedShooterPercent(percent);
+        // Rampa para que el shooter no cambie de golpe cuando cambia el setpoint.
+        // (reduce el "pulsing" cuando el tag se pierde/regresa)
+        double ramped = m_shooterPercentLimiter.calculate(percent);
+        m_shooter.setAssistedShooterPercent(ramped);
+        edu.wpi.first.wpilibj.smartdashboard.SmartDashboard.putNumber("Shooter/Assisted/PercentCmd", percent);
+        edu.wpi.first.wpilibj.smartdashboard.SmartDashboard.putNumber("Shooter/Assisted/PercentRamped", ramped);
     }
+
+    // Shooter anti-chatter: rampa de setpoint.
+    private final edu.wpi.first.math.filter.SlewRateLimiter m_shooterPercentLimiter =
+        new edu.wpi.first.math.filter.SlewRateLimiter(2.0);
 
     public RobotContainer() {
         configureBindings();
@@ -55,6 +64,14 @@ public class RobotContainer {
                     double leftY = -MathUtil.applyDeadband(m_driverController.getLeftY(), OIConstants.kDriveDeadband) * kDriveScale;
                     double leftX = -MathUtil.applyDeadband(m_driverController.getLeftX(), OIConstants.kDriveDeadband) * kDriveScale;
                     double rot = -MathUtil.applyDeadband(m_driverController.getRightX(), OIConstants.kDriveDeadband) * kDriveScale;
+
+                    // AutoAim: limitar velocidad máxima de traslación para facilitar apuntado.
+                    // (0.5 = 50% de la velocidad que normalmente permitiría el joystick)
+                    if (m_robotDrive.isAutoAimEnabled()) {
+                        leftY *= 0.5;
+                        leftX *= 0.5;
+                    }
+
                     double rotWithAutoAim = m_robotDrive.getRotationForDrive(rot);
                     m_robotDrive.drive(
                         leftY,
@@ -116,7 +133,9 @@ public class RobotContainer {
                     }
 
                     // AutoAim ON
-                    if (!m_camara.hasAutoAimTag() || m_camara.getAutoAimDistanceM() > 4.0) {
+                    boolean hasTagNow = m_camara.hasAutoAimTag();
+                    edu.wpi.first.wpilibj.smartdashboard.SmartDashboard.putBoolean("Shooter/AutoAim/HasTagNow", hasTagNow);
+                    if (!hasTagNow || m_camara.getAutoAimDistanceM() > 4.0) {
                         stopShooterAll();
                         setAssistedShooterPercent(-0.8);
                         return;
