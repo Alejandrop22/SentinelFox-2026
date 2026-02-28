@@ -431,6 +431,24 @@ public class DriveSubsystem extends SubsystemBase {
         return m_lastChassisSpeeds;
     }
 
+    /**
+     * Velocidades robot-relative actuales (lo que se mandó al drivetrain en el último ciclo).
+     * PathPlanner usa esto como feedback para el follower.
+     */
+    public synchronized ChassisSpeeds getRobotRelativeSpeeds() {
+        return m_lastChassisSpeeds;
+    }
+
+    /**
+     * Drive robot-relative (vx, vy, omega). Usado por PathPlanner AutoBuilder.
+     * NOTA: no aplica el límite de driver; asume velocidades en m/s y rad/s ya deseadas.
+     */
+    public void driveRobotRelative(ChassisSpeeds speeds) {
+        m_lastChassisSpeeds = speeds;
+        var swerveModuleStates = DriveConstants.kDriveKinematics.toSwerveModuleStates(speeds);
+        setModuleStates(swerveModuleStates);
+    }
+
     public synchronized void setRotationOverride(double rot) {
         m_rotationOverrideActive = true;
         m_rotationOverrideValue = MathUtil.clamp(rot, -1.0, 1.0);

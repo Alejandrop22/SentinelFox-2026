@@ -5,6 +5,7 @@ import com.revrobotics.spark.SparkMax;
 import com.revrobotics.spark.SparkBase.ControlType;
 import com.revrobotics.spark.SparkBase.PersistMode;
 import com.revrobotics.spark.SparkBase.ResetMode;
+import com.revrobotics.spark.config.SparkBaseConfig.IdleMode;
 import com.revrobotics.spark.SparkClosedLoopController;
 import com.revrobotics.spark.SparkLowLevel.MotorType;
 import com.revrobotics.spark.config.SparkMaxConfig;
@@ -16,6 +17,9 @@ public class Angular extends SubsystemBase {
   private final SparkMax m_angularMotor = new SparkMax(54, MotorType.kBrushless);
   private final SparkClosedLoopController m_pidController;
   private final RelativeEncoder m_encoder;
+
+  // Config guardada para poder re-aplicar IdleMode en runtime
+  private final SparkMaxConfig m_config = new SparkMaxConfig();
 
   private double m_targetPosition = 0;
   private boolean m_abajo = false;
@@ -40,12 +44,13 @@ public class Angular extends SubsystemBase {
     WAITING_AT_BOTTOM
   }
 
-  private static final double kDownPositionDeg = -(360.0 * 28);
+  private static final double kDownPositionDeg = -(360.0 * 25);
   private static final double kDownToleranceDeg = (360 * 15.0);
   private static final double kSetpointToleranceDeg = (360 * 20.0);
 
   // --- Manual open-loop mode (para calibración) ---
   private boolean m_manualOpenLoop = false;
+
 
   // --- Auto-bajar hasta stall y subir 2 rotaciones ---
   private enum AutoDownState {
@@ -65,19 +70,19 @@ public class Angular extends SubsystemBase {
   private static final double kStallCurrentA = 35.0;
   private static final double kStallVelocityDegPerSec = 50.0;
   private static final double kStallDebounceSec = 0.12;
-  private static final double kAutoBackoffRotations = 3.0; // subir N rotaciones (después de detectar stall)
+  private static final double kAutoBackoffRotations = 4; // subir N rotaciones (después de detectar stall)
 
   public Angular() {
-    SparkMaxConfig config = new SparkMaxConfig();
-    config.smartCurrentLimit(40);
-    config.voltageCompensation(12.0);
-    config.closedLoop
+    m_config.smartCurrentLimit(40);
+    m_config.voltageCompensation(12.0);
+    m_config.idleMode(IdleMode.kBrake);
+    m_config.closedLoop
         .p(0.00015, ClosedLoopSlot.kSlot0)
         .i(0.0, ClosedLoopSlot.kSlot0)
         .d(0.0, ClosedLoopSlot.kSlot0)
         .outputRange(-0.5, 0.5, ClosedLoopSlot.kSlot0);
-    config.encoder.positionConversionFactor(360.0);
-  m_angularMotor.configure(config, ResetMode.kResetSafeParameters, PersistMode.kPersistParameters);
+    m_config.encoder.positionConversionFactor(360.0);
+    m_angularMotor.configure(m_config, ResetMode.kResetSafeParameters, PersistMode.kPersistParameters);
 
     m_pidController = m_angularMotor.getClosedLoopController();
     m_encoder = m_angularMotor.getEncoder();
@@ -116,6 +121,17 @@ public class Angular extends SubsystemBase {
       m_angularMotor.set(0.0);
     }
     m_manualOpenLoop = false;
+  }
+
+  /**
+   * Mantiene la posición actual con closed-loop para que la gravedad no lo baje.
+   * Útil después de un jog manual.
+   */
+  public void holdCurrentPosition() {
+    m_manualOpenLoop = false;
+    m_targetPosition = m_encoder.getPosition();
+    m_pidController.setReference(m_targetPosition, ControlType.kPosition, ClosedLoopSlot.kSlot0);
+    SmartDashboard.putNumber("Angular/HoldTargetDeg", m_targetPosition);
   }
 
   /**

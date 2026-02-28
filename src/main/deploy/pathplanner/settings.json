@@ -1,0 +1,21 @@
+{
+  "holonomicMode": true,
+  "robotMass": 55.0,
+  "robotMOI": 6.0,
+
+  "driveWheelRadius": 0.0508,
+  "driveGearing": 6.75,
+  "maxDriveSpeed": 4.5,
+  "wheelCOF": 1.2,
+  "driveMotorType": "NEO",
+  "driveCurrentLimit": 45.0,
+
+  "flModuleX": 0.275,
+  "flModuleY": 0.275,
+  "frModuleX": 0.275,
+  "frModuleY": -0.275,
+  "blModuleX": -0.275,
+  "blModuleY": 0.275,
+  "brModuleX": -0.275,
+  "brModuleY": -0.275
+}
