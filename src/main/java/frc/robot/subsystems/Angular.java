@@ -29,7 +29,7 @@ public class Angular extends SubsystemBase {
   private UnjamState m_unjamState = UnjamState.IDLE;
   private double m_unjamNextActionTimeSec = 0.0;
 
-  private static final double kUnjamUpRelativePositionDeg = (360.0 * 10.0); // 10 rotaciones arriba
+  private static final double kUnjamUpRelativePositionDeg = (360.0 * 15.0); // 15 rotaciones arriba
   private static final double kUnjamWaitUpSec = 0.2;
   private static final double kUnjamWaitDownSec = 0.2;
 
@@ -44,9 +44,15 @@ public class Angular extends SubsystemBase {
     WAITING_AT_BOTTOM
   }
 
-  private static final double kDownPositionDeg = -(360.0 * 25);
-  private static final double kDownToleranceDeg = (360 * 15.0);
-  private static final double kSetpointToleranceDeg = (360 * 20.0);
+  private static final double kDownPositionDeg = -(360.0 * 31.5);
+
+  // Tolerancias (más conservadoras):
+  //  - kDownToleranceDeg: define cuándo consideramos que el mecanismo está "abajo" (m_abajo).
+  //    Si es muy grande, podrías marcar "abajo" aunque todavía falte bastante.
+  //  - kSetpointToleranceDeg: define cuándo una rutina automática considera que "ya llegó" al setpoint.
+  //    Si es muy grande, la rutina puede terminar antes de tiempo.
+  private static final double kDownToleranceDeg = (360 * 3.0);    // ±3 rotaciones alrededor de kDownPositionDeg
+  private static final double kSetpointToleranceDeg = (360 * 5.0); // ±5 rotaciones para finalizar rutinas
 
   // --- Manual open-loop mode (para calibración) ---
   private boolean m_manualOpenLoop = false;

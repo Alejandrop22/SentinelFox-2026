@@ -58,23 +58,24 @@ public class RobotContainer {
     // Angular jog (para calibración / reset 0)
     private boolean m_angularJogActive = false;
 
+    // Debounce simple para AutoAim-tag: evita que un frame sin tag apague/prenda el shooter.
+    private int m_autoAimTagPresentCycles = 0;
+    private static final int kAutoAimTagDebounceCycles = 5; // ~100ms
+
+    // Shooter fallback (equivalente al viejo "-4000 RPM").
+    // Mapea a porcentaje, y el subsistema Shooter lo convertirá a VOLTAJE.
+    private static final double kShooterFallbackPercent = -1.0;
+
     private void stopShooterAll() {
         m_asistedShooter.stop();
-        m_shooter.stopManualShooter();
+        // Apagar por completo.
+        m_shooter.stop();
     }
 
     private void setAssistedShooterPercent(double percent) {
-        // Rampa para que el shooter no cambie de golpe cuando cambia el setpoint.
-        // (reduce el "pulsing" cuando el tag se pierde/regresa)
-        double ramped = m_shooterPercentLimiter.calculate(percent);
-        m_shooter.setAssistedShooterPercent(ramped);
+        m_shooter.setAssistedShooterPercent(percent);
         edu.wpi.first.wpilibj.smartdashboard.SmartDashboard.putNumber("Shooter/Assisted/PercentCmd", percent);
-        edu.wpi.first.wpilibj.smartdashboard.SmartDashboard.putNumber("Shooter/Assisted/PercentRamped", ramped);
     }
-
-    // Shooter anti-chatter: rampa de setpoint.
-    private final edu.wpi.first.math.filter.SlewRateLimiter m_shooterPercentLimiter =
-        new edu.wpi.first.math.filter.SlewRateLimiter(2.0);
 
     public RobotContainer() {
         configurePathPlanner();
@@ -325,61 +326,9 @@ public class RobotContainer {
             new InstantCommand(() -> m_robotDrive.zeroHeading(), m_robotDrive)
         );
 
-        // POVLeft: toggle AutoAim (solo si Tag1)
-        m_driverController.povLeft().onTrue(
-            new InstantCommand(() -> {
-                if (m_robotDrive.isAutoAimEnabled()) {
-                    m_robotDrive.setAutoAimEnabled(false);
-                } else if (m_camara.hasAutoAimTag()) {
-                    m_robotDrive.setAutoAimEnabled(true);
-                }
-            }, m_robotDrive)
-        );
+        // Driver POVLeft libre (debug / reservado)
 
-        // LT (while held): Shooter (manual/assisted) para Control 0
-        m_driverController.leftTrigger().whileTrue(
-            new RunCommand(
-                () -> {
-                    if (m_shooter.isEmergencyEnabled()) {
-                        stopShooterAll();
-                        return;
-                    }
-
-                    // Reglas:
-                    // 1) AutoAim OFF  -> shooter fijo -0.7
-                    // 2) AutoAim ON pero SIN tag o >4m -> shooter fijo -0.8
-                    // 3) AutoAim ON y tag válido (<=4m) -> AssistedShooter (fórmula)
-                    if (!m_robotDrive.isAutoAimEnabled()) {
-                        stopShooterAll();
-                        setAssistedShooterPercent(-0.7);
-                        return;
-                    }
-
-                    // AutoAim ON
-                    boolean hasTagNow = m_camara.hasAutoAimTag();
-                    edu.wpi.first.wpilibj.smartdashboard.SmartDashboard.putBoolean("Shooter/AutoAim/HasTagNow", hasTagNow);
-                    if (!hasTagNow || m_camara.getAutoAimDistanceM() > 4.0) {
-                        stopShooterAll();
-                        setAssistedShooterPercent(-0.8);
-                        return;
-                    }
-
-                    // AutoAim ON + tag dentro de 4m
-                    if (m_asistedShooter.canShootNow()) {
-                        m_shooter.stopManualShooter();
-                        setAssistedShooterPercent(m_asistedShooter.getDesiredPercent());
-                    } else {
-                        // Si por alguna razón canShootNow() no deja (distancia 0, etc.), usar el fallback fuerte
-                        stopShooterAll();
-                        setAssistedShooterPercent(-0.8);
-                    }
-                },
-                m_asistedShooter, m_shooter)
-        ).onFalse(
-            new InstantCommand(() -> {
-                stopShooterAll();
-            }, m_asistedShooter, m_shooter)
-        );
+        // LT del Driver: LIBRE (shooter ahora es solo del operador)
 
         // B (while held): Banda + AuxMotor para Control 0
         m_driverController.b().whileTrue(
@@ -425,7 +374,9 @@ public class RobotContainer {
             new InstantCommand(() -> {
                 m_intake100ToggleActive = !m_intake100ToggleActive;
                 if (m_intake100ToggleActive) {
-                    // Prender 100% forward
+                    // Prender 100%
+                    // Nota: la dirección real depende de cómo esté implementado el Intake.
+                    // Aquí llamamos a intakeFullReverse() tal como está en el subsistema.
                     m_intake.intakeFullReverse();
                 } else {
                     // Apagar 100%
@@ -441,9 +392,9 @@ public class RobotContainer {
             new InstantCommand(() -> m_intake.stop(), m_intake)
         );
 
-        // Angular: A -> posición 0° (home)
+        // Angular: Y -> posición "home" (setpoint = -360°)
         m_operatorController.y().onTrue(
-            new InstantCommand(() -> m_angular.irAPosicion((-360)), m_angular)
+            new InstantCommand(() -> m_angular.irAPosicion((-360*3)), m_angular)
         );
 
         // Angular: B -> auto-bajar hasta detectar stall y luego subir 2 rotaciones
@@ -458,13 +409,20 @@ public class RobotContainer {
 
         // Angular: Y -> abajo
         m_operatorController.a().onTrue(
-            new InstantCommand(() -> m_angular.irAPosicion(-(360.0 * 30
-            )), m_angular)
+            new InstantCommand(() -> m_angular.irAPosicion(-(360.0 * 31.5)), m_angular)
         );
 
         // Angular: START -> posición intermedia
         m_operatorController.start().onTrue(
             new InstantCommand(() -> m_angular.irAPosicion(-(360.0 * 17)), m_angular)
+        );
+
+        // POVLeft (while held): Shooter open-loop DEBUG (-20%)
+        // Esto NO usa PID/velocity. Sirve para ver si el motor/cableado responde.
+        m_operatorController.povLeft().whileTrue(
+            new RunCommand(() -> m_shooter.debugSetShooterPercent(-0.20), m_shooter)
+        ).onFalse(
+            new InstantCommand(() -> m_shooter.stop(), m_shooter)
         );
 
         m_operatorController.rightTrigger().whileTrue(
@@ -475,31 +433,44 @@ public class RobotContainer {
                         return;
                     }
 
-                    // Reglas:
-                    // 1) AutoAim OFF  -> shooter fijo -0.7
-                    // 2) AutoAim ON pero SIN tag o >4m -> shooter fijo -0.8
-                    // 3) AutoAim ON y tag válido (<=4m) -> AssistedShooter (fórmula)
+                    // Elegir UN percent a mandar este ciclo. No hagas stop+set en el mismo loop.
+                    double cmdPercent = 0.0;
+
+                    // Reglas (porcentaje->voltaje):
+                    // 1) AutoAim OFF  -> shooter fijo (fallback)
+                    // 2) AutoAim ON pero SIN tag o >4m -> shooter fijo (fallback)
+                    // 3) AutoAim ON y tag válido (<=4m) -> AssistedShooter (fórmula -> %)
                     if (!m_robotDrive.isAutoAimEnabled()) {
-                        stopShooterAll();
-                        setAssistedShooterPercent(-0.7);
+                        cmdPercent = kShooterFallbackPercent;
+                        setAssistedShooterPercent(cmdPercent);
                         return;
                     }
 
                     // AutoAim ON
-                    if (!m_camara.hasAutoAimTag() || m_camara.getAutoAimDistanceM() > 4.0) {
-                        stopShooterAll();
-                        setAssistedShooterPercent(-0.8);
+                    boolean hasTagNow = m_camara.hasAutoAimTag();
+                    if (hasTagNow) {
+                        m_autoAimTagPresentCycles = Math.min(kAutoAimTagDebounceCycles, m_autoAimTagPresentCycles + 1);
+                    } else {
+                        m_autoAimTagPresentCycles = Math.max(0, m_autoAimTagPresentCycles - 1);
+                    }
+
+                    boolean hasTagDebounced = m_autoAimTagPresentCycles >= kAutoAimTagDebounceCycles;
+                    boolean tooFar = m_camara.getAutoAimDistanceM() > 4.0;
+                    if (!hasTagDebounced || tooFar) {
+                        cmdPercent = kShooterFallbackPercent;
+                        setAssistedShooterPercent(cmdPercent);
                         return;
                     }
 
                     // AutoAim ON + tag dentro de 4m
                     if (m_asistedShooter.canShootNow()) {
                         m_shooter.stopManualShooter();
-                        setAssistedShooterPercent(m_asistedShooter.getDesiredPercent());
+                        cmdPercent = m_asistedShooter.getDesiredPercent();
+                        setAssistedShooterPercent(cmdPercent);
                     } else {
                         // Si por alguna razón canShootNow() no deja (distancia 0, etc.), usar el fallback fuerte
-                        stopShooterAll();
-                        setAssistedShooterPercent(-0.8);
+                        cmdPercent = kShooterFallbackPercent;
+                        setAssistedShooterPercent(cmdPercent);
                     }
                 },
                 m_asistedShooter, m_shooter)
@@ -508,19 +479,24 @@ public class RobotContainer {
                 stopShooterAll();
             }, m_asistedShooter, m_shooter)
         );
-        InstantCommand toggleEmergencyShooterCmd = new InstantCommand(() -> {
-            m_asistedShooter.stop();
-            m_shooter.toggleEmergencyShooter();
-        }, m_shooter, m_asistedShooter);
-
-        m_operatorController.leftStick().onTrue(toggleEmergencyShooterCmd);
-        m_operatorController.rightStick().onTrue(toggleEmergencyShooterCmd);
-
         // X (while held): Banda + AuxMotor
         m_operatorController.x().whileTrue(
             new RunCommand(() -> {
                 m_shooter.startBelt();
                 m_auxMotor.startReverseAux();
+            }, m_shooter, m_auxMotor)
+        ).onFalse(
+            new InstantCommand(() -> {
+                m_shooter.stopBelt();
+                m_auxMotor.stop();
+            }, m_shooter, m_auxMotor)
+        );
+
+        // PovDown (while held): Banda + AuxMotor
+        m_operatorController.povDown().whileTrue(
+            new RunCommand(() -> {
+                m_shooter.reverseBelt();
+                m_auxMotor.stop();
             }, m_shooter, m_auxMotor)
         ).onFalse(
             new InstantCommand(() -> {

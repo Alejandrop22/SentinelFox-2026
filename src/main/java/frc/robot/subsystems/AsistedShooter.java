@@ -7,36 +7,20 @@ import edu.wpi.first.wpilibj2.command.SubsystemBase;
 
 public class AsistedShooter extends SubsystemBase {
 	private final Camara m_camara;
-	private static final double kPercentSlewRatePerSec = 2.5;
-	private final SlewRateLimiter m_percentLimiter = new SlewRateLimiter(kPercentSlewRatePerSec);
+	private static final double kRpmSlewRatePerSec = 1500.0;
+	private final SlewRateLimiter m_rpmLimiter = new SlewRateLimiter(kRpmSlewRatePerSec);
 	private static final double kMaxShootDistanceMeters = 4.0;
-	private static final double kMinDistanceMeters = 0.3;
+	private static final double kMinDistanceMeters = 0.30;
 
-	// Curva basada en TUS datos medidos (interpolación lineal por tramos).
-	// Distancias:
-	//  - d1 = 23.5 in  -> shooter 0.56
-	//  - d2 = 1.0m + 23.5 in -> shooter 0.65
-	//  - d3 = 2.0m + 23.5 in -> shooter 0.73
-	// NOTA: "altura máxima mínima 1.90m" no se puede garantizar solo con la velocidad del shooter,
-	// porque depende del ángulo (Angular) y de la física real. Pero sí podemos corregir la curva para
-	// que NO se pase de fuerza respecto a las pruebas.
-	private static final double kInchesToMeters = 0.0254;
-	private static final double kD1_M = 23.5 * kInchesToMeters;
-	private static final double kD2_M = 1.0 + (23.5 * kInchesToMeters);
-	private static final double kD3_M = 2.0 + (23.5 * kInchesToMeters);
+	// Curva confirmada por ti: rpm(x) = -33x^2 + 642x + 3800
+	// x está en METROS.
+	private static final double kA = -33.0;
+	private static final double kB = 642.0;
+	private static final double kC = 3800.0;
 
-	private static final double kP1 = 0.56;
-	private static final double kP2 = 0.65;
-	private static final double kP3 = 0.73;
-
-	// Seguridad: no dejar que el assisted pase de lo mas alto que mediste (evita que quede muy fuerte).
-	private static final double kMinPercentMag = 0.45;
-	private static final double kMaxPercentMag = kP3;
-
-	// Ajuste global (multiplica toda la curva). Si "en general va mas rapido", baja este numero.
-	// Lo publicamos a SmartDashboard para poder tunear en la cancha.
-	private static final String kShootScaleKey = "AssistShooter/ShootScale";
-	private static final double kDefaultShootScale = 1;
+	// Seguridad de setpoint: evita pedir RPM imposibles o negativas.
+	private static final double kMinRpm = 2500.0;
+	private static final double kMaxRpm = 6500.0;
 
 	public AsistedShooter(Camara camara) {
 		m_camara = camara;
@@ -45,12 +29,12 @@ public class AsistedShooter extends SubsystemBase {
 	public boolean canShootNow() {
 		// Usar la distancia del tag seleccionado del AutoAim (26/25/..)
 		if (!m_camara.hasAutoAimTag()) {
-			m_percentLimiter.reset(0.0);
+			m_rpmLimiter.reset(0.0);
 			return false;
 		}
 		double dist = getAutoAimDistanceMeters();
 		if (!(dist > 0.0 && dist <= kMaxShootDistanceMeters)) {
-			m_percentLimiter.reset(0.0);
+			m_rpmLimiter.reset(0.0);
 			return false;
 		}
 		return true;
@@ -60,51 +44,49 @@ public class AsistedShooter extends SubsystemBase {
 		return m_camara.getAutoAimDistanceM();
 	}
 
-	public double percentForDistance(double distanceMeters) {
+	public double rpmForDistance(double distanceMeters) {
 		double d = MathUtil.clamp(distanceMeters, kMinDistanceMeters, kMaxShootDistanceMeters);
 
-		double percentMag;
-		if (d <= kD1_M) {
-			// Si estas mas cerca que tu primer punto medido, BAJAR un poco la velocidad.
-			// Interpolamos desde kMinPercentMag (muy cerca) hasta kP1 en d1.
-			percentMag = lerp(kMinDistanceMeters, kMinPercentMag, kD1_M, kP1, d);
-		} else if (d <= kD2_M) {
-			percentMag = lerp(kD1_M, kP1, kD2_M, kP2, d);
-		} else if (d <= kD3_M) {
-			percentMag = lerp(kD2_M, kP2, kD3_M, kP3, d);
-		} else {
-			// Más allá de tu último punto medido, mantener constante para no sobre-potenciar.
-			percentMag = kP3;
-		}
-
-		// Escala global (tuning)
-		double shootScale = SmartDashboard.getNumber(kShootScaleKey, kDefaultShootScale);
-		percentMag *= MathUtil.clamp(shootScale, 0.2, 1.2);
-
-		percentMag = MathUtil.clamp(percentMag, kMinPercentMag, kMaxPercentMag);
-		return -percentMag; // shooter "forward" es negativo en este robot
-	}
-
-	private static double lerp(double x1, double y1, double x2, double y2, double x) {
-		if (x2 == x1) {
-			return y1;
-		}
-		double t = (x - x1) / (x2 - x1);
-		return y1 + (t * (y2 - y1));
+		// rpm(x) = ax^2 + bx + c
+		double rpmMag = (kA * d * d) + (kB * d) + kC;
+		rpmMag = MathUtil.clamp(rpmMag, kMinRpm, kMaxRpm);
+		return -rpmMag; // En este robot, shooter "forward" es NEGATIVO
 	}
 
 	public void stop() {
-		m_percentLimiter.reset(0.0);
+		m_rpmLimiter.reset(0.0);
 	}
 
-	public double getDesiredPercent() {
+	public double getDesiredRpm() {
 		double dist = getAutoAimDistanceMeters();
-		double raw = percentForDistance(dist);
-		return m_percentLimiter.calculate(raw);
+		double raw = rpmForDistance(dist);
+		return m_rpmLimiter.calculate(raw);
+	}
+
+	/**
+	 * Salida en porcentaje ([-1..1]) equivalente al RPM deseado.
+	 *
+	 * <p>Como ya no estamos usando control por velocidad, convertimos el RPM deseado a un
+	 * porcentaje aproximado usando un máximo nominal.
+	 */
+	public double getDesiredPercent() {
+		final double kNominalMaxRpmMagnitude = 6000.0;
+		return MathUtil.clamp(getDesiredRpm() / kNominalMaxRpmMagnitude, -1.0, 1.0);
 	}
 
 	@Override
 	public void periodic() {
+		boolean hasTag = m_camara.hasAutoAimTag();
+		SmartDashboard.putBoolean("AssistShooter/HasTag", hasTag);
+
+		double dist = hasTag ? getAutoAimDistanceMeters() : 0.0;
+		SmartDashboard.putNumber("AssistShooter/DistanceM", dist);
+
+		double targetRpmRaw = 0.0;
+		if (hasTag) {
+			targetRpmRaw = rpmForDistance(dist);
+		}
+		SmartDashboard.putNumber("AssistShooter/TargetRPMRaw", targetRpmRaw);
 	}
 
 }

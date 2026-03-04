@@ -26,7 +26,7 @@ public final class Constants {
     public static final double kPhysicalMaxSpeedMetersPerSecond = 4.8;
 
     /** Limitador para que el driver no maneje al 100% (por ejemplo, modo novato). */
-    public static final double kDriverSpeedLimit = 0.5;
+    public static final double kDriverSpeedLimit = 0.9;
 
     /** Velocidad máxima permitida = física * limitador. */
     public static final double kMaxSpeedMetersPerSecond = kPhysicalMaxSpeedMetersPerSecond * kDriverSpeedLimit;
