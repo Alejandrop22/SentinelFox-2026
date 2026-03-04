@@ -11,6 +11,18 @@ public class AsistedShooter extends SubsystemBase {
 	private final SlewRateLimiter m_rpmLimiter = new SlewRateLimiter(kRpmSlewRatePerSec);
 	private static final double kMaxShootDistanceMeters = 4.0;
 	private static final double kMinDistanceMeters = 0.30;
+	// Exponential mapping params fitted to points:
+	//  d=2m -> 0.53
+	//  d=3m -> 0.60
+	//  d=4m -> 0.69
+	// We fit percent(d) = A * exp(B * d) + C
+	private static final double kExpA = 0.1482098765;
+	private static final double kExpB = 0.2513144283; // ln(9/7)
+	private static final double kExpC = 0.285;
+
+	// Smoothing for percent output (units: percent per second)
+	private static final double kPercentSlewRatePerSec = 1.0;
+	private final SlewRateLimiter m_percentLimiter = new SlewRateLimiter(kPercentSlewRatePerSec);
 
 	// Curva confirmada por ti: rpm(x) = -33x^2 + 642x + 3800
 	// x está en METROS.
@@ -64,14 +76,23 @@ public class AsistedShooter extends SubsystemBase {
 	}
 
 	/**
-	 * Salida en porcentaje ([-1..1]) equivalente al RPM deseado.
+	 * Salida en porcentaje ([-1..1]) calculada desde la distancia usando una curva
+	 * exponencial ajustada a los puntos pedidos por el usuario.
 	 *
-	 * <p>Como ya no estamos usando control por velocidad, convertimos el RPM deseado a un
-	 * porcentaje aproximado usando un máximo nominal.
+	 * <p>La función devuelve signo NEGATIVO para preservar la convención del robot
+	 * (shooter "forward" es negativo). Se aplica un límite y un suavizado leve.
 	 */
 	public double getDesiredPercent() {
-		final double kNominalMaxRpmMagnitude = 6000.0;
-		return MathUtil.clamp(getDesiredRpm() / kNominalMaxRpmMagnitude, -1.0, 1.0);
+		double dist = getAutoAimDistanceMeters();
+		// Clamp distancia válida para la curva
+		double d = MathUtil.clamp(dist, kMinDistanceMeters, kMaxShootDistanceMeters);
+		// percent magnitude (positivo)
+		double rawPercent = (kExpA * Math.exp(kExpB * d)) + kExpC;
+		rawPercent = MathUtil.clamp(rawPercent, 0.0, 1.0);
+		// Aplicar suavizado (limitar cambio por segundo)
+		double smoothed = m_percentLimiter.calculate(rawPercent);
+		// Shooter forward convention: NEGATIVO
+		return -MathUtil.clamp(smoothed, -1.0, 1.0);
 	}
 
 	@Override
@@ -83,10 +104,13 @@ public class AsistedShooter extends SubsystemBase {
 		SmartDashboard.putNumber("AssistShooter/DistanceM", dist);
 
 		double targetRpmRaw = 0.0;
+		double targetPercentRaw = 0.0;
 		if (hasTag) {
 			targetRpmRaw = rpmForDistance(dist);
+			targetPercentRaw = (kExpA * Math.exp(kExpB * dist)) + kExpC;
 		}
 		SmartDashboard.putNumber("AssistShooter/TargetRPMRaw", targetRpmRaw);
+		SmartDashboard.putNumber("AssistShooter/TargetPercentRaw", targetPercentRaw);
 	}
 
 }

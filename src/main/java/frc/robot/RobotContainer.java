@@ -64,7 +64,7 @@ public class RobotContainer {
 
     // Shooter fallback (equivalente al viejo "-4000 RPM").
     // Mapea a porcentaje, y el subsistema Shooter lo convertirá a VOLTAJE.
-    private static final double kShooterFallbackPercent = -1.0;
+    private static final double kShooterFallbackPercent = -0.69;
 
     private void stopShooterAll() {
         m_asistedShooter.stop();
@@ -525,6 +525,16 @@ public class RobotContainer {
         // Nota: 'back()' existe en CommandXboxController para Xbox (View/Back).
         m_operatorController.back().onTrue(
             new InstantCommand(() -> m_angular.resetEncoder(), m_angular)
+        );
+
+        // Left Stick (one-shot): Toggle AutoAim ON/OFF (operador)
+        // Esto permite habilitar AutoAim desde el driver station si el equipo lo desea.
+        m_operatorController.leftStick().onTrue(
+            new InstantCommand(() -> {
+                boolean newState = !m_robotDrive.isAutoAimEnabled();
+                m_robotDrive.setAutoAimEnabled(newState);
+                SmartDashboard.putBoolean("AutoAim/EnabledRequested", newState);
+            }, m_robotDrive)
         );
     }
 
