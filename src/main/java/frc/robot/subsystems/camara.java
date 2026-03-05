@@ -34,11 +34,78 @@ public class Camara extends SubsystemBase {
     private double trench_y_m;
 
     /**
-     * Offset horizontal de montaje de la cámara (grados) para compensar que no está centrada.
-     * Si la cámara está físicamente a la derecha del centro del robot, normalmente necesitarás un offset NEGATIVO
-     * (apunta un poco más a la izquierda) pero depende de tu montaje y del eje de yaw; ajusta en la práctica.
+     * Offset de montaje de la cámara.
+     *
+     * <p>Si la cámara está 10cm a la derecha del centro del robot, entonces el vector
+     * camera->tag tiene un componente lateral (Y) que NO corresponde al centro del robot.
+     * Compensamos eso ajustando el Y antes de calcular yaw/distancia 2D.
+     */
+    private static final double kCameraMountRightOffsetM = 0.0; // +derecha (m)
+
+    /**
+     * Offset horizontal de montaje de la cámara (grados) para compensar yaw si el lente
+     * no está perfectamente alineado.
      */
     private static final double kCameraYawOffsetDeg = 0.0;
+
+    private static final String kCameraRightOffsetKey = "Vision/Camera/MountRightOffsetM";
+
+    private boolean m_rightOffsetDashboardInitialized = false;
+
+    // Publicaciones: mantener consistencia (NetworkTables sólo muestra/crea keys que se publican).
+    private static final String kVisionHasTargetsKey = "Vision/HasTargets";
+    private static final String kVisionHasAutoAimTagKey = "Vision/HasAutoAimTag";
+    private static final String kVisionAutoAimTagIdKey = "Vision/AutoAimTagId";
+    private static final String kVisionAutoAimYawDegKey = "Vision/AutoAimYawDeg";
+    private static final String kVisionAutoAimDistanceMKey = "Vision/AutoAimDistanceM";
+    private static final String kVisionAutoAimYawRawDegKey = "Vision/AutoAimYawRawDeg";
+    private static final String kVisionAutoAimYawOffsetDegKey = "Vision/AutoAimYawOffsetDeg";
+    private static final String kVisionAutoAimRightOffsetMKey = "Vision/AutoAimRightOffsetM";
+    private static final String kVisionAutoAimRawYKey = "Vision/AutoAim/RawY";
+    private static final String kVisionAutoAimCorrectedYKey = "Vision/AutoAim/CorrectedY";
+
+    private static final String kVisionTrenchHasTagKey = "Vision/Trench/HasTag";
+    private static final String kVisionTrenchTagIdKey = "Vision/Trench/TagId";
+    private static final String kVisionTrenchYawRawDegKey = "Vision/Trench/YawRawDeg";
+    private static final String kVisionTrenchYawDegKey = "Vision/Trench/YawDeg";
+    private static final String kVisionTrenchDistanceMKey = "Vision/Trench/DistanceM";
+    private static final String kVisionTrenchXKey = "Vision/Trench/X";
+    private static final String kVisionTrenchYKey = "Vision/Trench/Y";
+
+    /**
+     * Resultado de geometría usando el vector corregido (como si midiera desde el centro del robot).
+     * yawDeg: +izquierda (si Y+ es izquierda), -derecha.
+     */
+    private static final class CorrectedTarget {
+        final double x;
+        final double y;
+        final double distance;
+        final double yawDeg;
+
+        CorrectedTarget(double x, double y, double distance, double yawDeg) {
+            this.x = x;
+            this.y = y;
+            this.distance = distance;
+            this.yawDeg = yawDeg;
+        }
+    }
+
+    private static CorrectedTarget computeCorrectedTarget(PhotonTrackedTarget target, double mountRightOffsetM) {
+        double x = target.getBestCameraToTarget().getX();
+        // Corregir el componente lateral porque la cámara no está en el centro del robot.
+        // Convencion esperada: +mountRightOffsetM significa "camara montada a la derecha".
+        // Para obtener el vector desde el centro del robot hacia el tag,
+        // sumamos el offset (en vez de restarlo) para no invertir el yaw.
+        double rawY = target.getBestCameraToTarget().getY();
+        double y = rawY + mountRightOffsetM;
+        double z = target.getBestCameraToTarget().getZ();
+        double distance = Math.sqrt((x * x) + (y * y) + (z * z));
+        double yawDeg = Math.toDegrees(Math.atan2(y, x));
+        // Telemetria: esto solo vive durante el ciclo donde se computa el target.
+        SmartDashboard.putNumber(kVisionAutoAimRawYKey, rawY);
+        SmartDashboard.putNumber(kVisionAutoAimCorrectedYKey, y);
+        return new CorrectedTarget(x, y, distance, yawDeg);
+    }
 
     /** True si se ve el tag elegido para AutoAim (cualquiera de kAutoAimTagIds). */
     public boolean hasAutoAimTag() {
@@ -111,6 +178,32 @@ public class Camara extends SubsystemBase {
 
     @Override
     public void periodic() {
+        // Publicar/leer offset para poder tunear en Shuffleboard si quieres.
+        // Importante: NO publicar el default cada ciclo, porque pisas el valor que el usuario cambie.
+        if (!m_rightOffsetDashboardInitialized) {
+            SmartDashboard.putNumber(kCameraRightOffsetKey, kCameraMountRightOffsetM);
+            m_rightOffsetDashboardInitialized = true;
+        }
+        final double rightOffsetM = SmartDashboard.getNumber(kCameraRightOffsetKey, kCameraMountRightOffsetM);
+
+    // Publicar defaults SIEMPRE para que Shuffleboard no pierda keys.
+        SmartDashboard.putBoolean(kVisionHasTargetsKey, false);
+        SmartDashboard.putBoolean(kVisionTrenchHasTagKey, false);
+        SmartDashboard.putNumber(kVisionTrenchTagIdKey, 0);
+        SmartDashboard.putNumber(kVisionTrenchYawRawDegKey, 0);
+        SmartDashboard.putNumber(kVisionTrenchYawDegKey, 0);
+        SmartDashboard.putNumber(kVisionTrenchDistanceMKey, 0);
+        SmartDashboard.putNumber(kVisionTrenchXKey, 0);
+        SmartDashboard.putNumber(kVisionTrenchYKey, 0);
+
+        SmartDashboard.putBoolean(kVisionHasAutoAimTagKey, false);
+        SmartDashboard.putNumber(kVisionAutoAimTagIdKey, 0);
+        SmartDashboard.putNumber(kVisionAutoAimYawDegKey, 0);
+        SmartDashboard.putNumber(kVisionAutoAimDistanceMKey, 0);
+        SmartDashboard.putNumber(kVisionAutoAimYawRawDegKey, 0);
+        SmartDashboard.putNumber(kVisionAutoAimYawOffsetDegKey, kCameraYawOffsetDeg);
+        SmartDashboard.putNumber(kVisionAutoAimRightOffsetMKey, rightOffsetM);
+
         PhotonPipelineResult result = m_camera.getLatestResult();
 
         has_trench_tag = false;
@@ -134,10 +227,7 @@ public class Camara extends SubsystemBase {
                 // Trench selection: choose the closest Trench tag.
                 int id = t.getFiducialId();
                 if (isTrenchId(id)) {
-                    double x = t.getBestCameraToTarget().getX();
-                    double y = t.getBestCameraToTarget().getY();
-                    double z = t.getBestCameraToTarget().getZ();
-                    double d = Math.sqrt((x * x) + (y * y) + (z * z));
+                    double d = computeCorrectedTarget(t, rightOffsetM).distance;
                     if (d < bestTrenchDistance) {
                         bestTrenchDistance = d;
                         bestTrenchTarget = t;
@@ -145,10 +235,7 @@ public class Camara extends SubsystemBase {
                 }
 
                 if (isAutoAimId(id)) {
-                    double x = t.getBestCameraToTarget().getX();
-                    double y = t.getBestCameraToTarget().getY();
-                    double z = t.getBestCameraToTarget().getZ();
-                    double d = Math.sqrt((x * x) + (y * y) + (z * z));
+                    double d = computeCorrectedTarget(t, rightOffsetM).distance;
                     if (d < bestAutoAimDistance) {
                         bestAutoAimDistance = d;
                         bestAutoAimTarget = t;
@@ -159,53 +246,42 @@ public class Camara extends SubsystemBase {
             if (bestTrenchTarget != null) {
                 has_trench_tag = true;
                 trench_tag_id = bestTrenchTarget.getFiducialId();
-                double rawYaw = bestTrenchTarget.getYaw();
+                CorrectedTarget ct = computeCorrectedTarget(bestTrenchTarget, rightOffsetM);
+                trench_x_m = ct.x;
+                trench_y_m = ct.y;
+                trench_distance_m = ct.distance;
+                double rawYaw = ct.yawDeg;
                 trench_yaw_deg = rawYaw + kCameraYawOffsetDeg;
-                trench_x_m = bestTrenchTarget.getBestCameraToTarget().getX();
-                trench_y_m = bestTrenchTarget.getBestCameraToTarget().getY();
-                double z = bestTrenchTarget.getBestCameraToTarget().getZ();
-                trench_distance_m = Math.sqrt((trench_x_m * trench_x_m) + (trench_y_m * trench_y_m) + (z * z));
 
-                SmartDashboard.putNumber("Vision/Trench/TagId", trench_tag_id);
-                SmartDashboard.putNumber("Vision/Trench/YawRawDeg", rawYaw);
-                SmartDashboard.putNumber("Vision/Trench/YawDeg", trench_yaw_deg);
-                SmartDashboard.putNumber("Vision/Trench/DistanceM", trench_distance_m);
-                SmartDashboard.putNumber("Vision/Trench/X", trench_x_m);
-                SmartDashboard.putNumber("Vision/Trench/Y", trench_y_m);
+                SmartDashboard.putBoolean(kVisionTrenchHasTagKey, true);
+                SmartDashboard.putNumber(kVisionTrenchTagIdKey, trench_tag_id);
+                SmartDashboard.putNumber(kVisionTrenchYawRawDegKey, rawYaw);
+                SmartDashboard.putNumber(kVisionTrenchYawDegKey, trench_yaw_deg);
+                SmartDashboard.putNumber(kVisionTrenchDistanceMKey, trench_distance_m);
+                SmartDashboard.putNumber(kVisionTrenchXKey, trench_x_m);
+                SmartDashboard.putNumber(kVisionTrenchYKey, trench_y_m);
             }
 
             if (bestAutoAimTarget != null) {
                 has_autoaim_tag = true;
                 autoaim_tag_id = bestAutoAimTarget.getFiducialId();
-                double rawYaw = bestAutoAimTarget.getYaw();
+                CorrectedTarget ct = computeCorrectedTarget(bestAutoAimTarget, rightOffsetM);
+                autoaim_distance_m = ct.distance;
+                double rawYaw = ct.yawDeg;
                 autoaim_yaw_deg = rawYaw + kCameraYawOffsetDeg;
-                autoaim_distance_m = bestAutoAimDistance;
 
-                SmartDashboard.putNumber("Vision/AutoAimYawRawDeg", rawYaw);
-                SmartDashboard.putNumber("Vision/AutoAimYawOffsetDeg", kCameraYawOffsetDeg);
+                SmartDashboard.putBoolean(kVisionHasAutoAimTagKey, true);
+                SmartDashboard.putNumber(kVisionAutoAimTagIdKey, autoaim_tag_id);
+                SmartDashboard.putNumber(kVisionAutoAimYawDegKey, autoaim_yaw_deg);
+                SmartDashboard.putNumber(kVisionAutoAimDistanceMKey, autoaim_distance_m);
+                SmartDashboard.putNumber(kVisionAutoAimYawRawDegKey, rawYaw);
+                SmartDashboard.putNumber(kVisionAutoAimYawOffsetDegKey, kCameraYawOffsetDeg);
+                SmartDashboard.putNumber(kVisionAutoAimRightOffsetMKey, rightOffsetM);
             }
 
-            SmartDashboard.putBoolean("Vision/HasTargets", true);
-            SmartDashboard.putBoolean("Vision/Trench/HasTag", has_trench_tag);
-            SmartDashboard.putBoolean("Vision/HasAutoAimTag", has_autoaim_tag);
-            SmartDashboard.putNumber("Vision/AutoAimTagId", autoaim_tag_id);
-            SmartDashboard.putNumber("Vision/AutoAimYawDeg", autoaim_yaw_deg);
-            SmartDashboard.putNumber("Vision/AutoAimDistanceM", autoaim_distance_m);
+            SmartDashboard.putBoolean(kVisionHasTargetsKey, true);
         } else {
-            SmartDashboard.putBoolean("Vision/HasTargets", false);
-            SmartDashboard.putBoolean("Vision/Trench/HasTag", false);
-            SmartDashboard.putNumber("Vision/Trench/TagId", 0);
-            SmartDashboard.putNumber("Vision/Trench/YawRawDeg", 0);
-            SmartDashboard.putNumber("Vision/Trench/YawDeg", 0);
-            SmartDashboard.putNumber("Vision/Trench/DistanceM", 0);
-            SmartDashboard.putNumber("Vision/Trench/X", 0);
-            SmartDashboard.putNumber("Vision/Trench/Y", 0);
-            SmartDashboard.putBoolean("Vision/HasAutoAimTag", false);
-            SmartDashboard.putNumber("Vision/AutoAimTagId", 0);
-            SmartDashboard.putNumber("Vision/AutoAimYawDeg", 0);
-            SmartDashboard.putNumber("Vision/AutoAimDistanceM", 0);
-            SmartDashboard.putNumber("Vision/AutoAimYawRawDeg", 0);
-            SmartDashboard.putNumber("Vision/AutoAimYawOffsetDeg", kCameraYawOffsetDeg);
+            // Defaults ya publicados arriba.
         }
     }
 

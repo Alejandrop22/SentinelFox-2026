@@ -186,7 +186,9 @@ public class DriveSubsystem extends SubsystemBase {
         SmartDashboard.putBoolean("AutoAim/TrackingAutoAimTag", true);
         SmartDashboard.putNumber("AutoAim/TagId", m_camara.getAutoAimTagId());
 
-        double yawErrorDegRaw = -MathUtil.inputModulus(m_camara.getAutoAimYawDeg(), -180.0, 180.0);
+    // IMPORTANT: yaw sign must be consistent with rotation direction.
+    // Removing the extra negation prevents the controller from "running away" from the tag.
+    double yawErrorDegRaw = MathUtil.inputModulus(m_camara.getAutoAimYawDeg(), -180.0, 180.0);
         double gyroRateDegPerSec = getTurnRate();
         double yawErrorDeg = MathUtil.inputModulus(
             yawErrorDegRaw - (gyroRateDegPerSec * kVisionLatencySec),

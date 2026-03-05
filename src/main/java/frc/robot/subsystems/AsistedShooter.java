@@ -9,20 +9,23 @@ public class AsistedShooter extends SubsystemBase {
 	private final Camara m_camara;
 	private static final double kRpmSlewRatePerSec = 1500.0;
 	private final SlewRateLimiter m_rpmLimiter = new SlewRateLimiter(kRpmSlewRatePerSec);
-	private static final double kMaxShootDistanceMeters = 4.0;
+	private static final double kMaxShootDistanceMeters = 5.0;
 	private static final double kMinDistanceMeters = 0.30;
-	// Exponential mapping params fitted to points:
-	//  d=2m -> 0.53
-	//  d=3m -> 0.60
-	//  d=4m -> 0.69
-	// We fit percent(d) = A * exp(B * d) + C
-	private static final double kExpA = 0.1482098765;
-	private static final double kExpB = 0.2513144283; // ln(9/7)
-	private static final double kExpC = 0.285;
+	// Curva nueva (100%):
+	// percentMag(x) = 0.01x^2 + 0.02x + 0.45
+	// donde x está en METROS.
+	private static final double kPercentA = 0.01;
+	private static final double kPercentB = 0.02;
+	private static final double kPercentC = 0.45;
 
 	// Smoothing for percent output (units: percent per second)
-	private static final double kPercentSlewRatePerSec = 1.0;
+	// Mas bajo = mas estable (menos "fluctuacion" audible) pero responde mas lento.
+	private static final double kPercentSlewRatePerSec = 0.35;
 	private final SlewRateLimiter m_percentLimiter = new SlewRateLimiter(kPercentSlewRatePerSec);
+
+	// Si el cambio es muy pequeno, no lo persigas (reduce ruido por mediciones de distancia inestables)
+	private static final double kPercentChangeDeadband = 0.02;
+	private double m_lastPercentCmd = 0.0;
 
 	// Curva confirmada por ti: rpm(x) = -33x^2 + 642x + 3800
 	// x está en METROS.
@@ -67,6 +70,8 @@ public class AsistedShooter extends SubsystemBase {
 
 	public void stop() {
 		m_rpmLimiter.reset(0.0);
+		m_percentLimiter.reset(0.0);
+		m_lastPercentCmd = 0.0;
 	}
 
 	public double getDesiredRpm() {
@@ -87,12 +92,18 @@ public class AsistedShooter extends SubsystemBase {
 		// Clamp distancia válida para la curva
 		double d = MathUtil.clamp(dist, kMinDistanceMeters, kMaxShootDistanceMeters);
 		// percent magnitude (positivo)
-		double rawPercent = (kExpA * Math.exp(kExpB * d)) + kExpC;
+		double rawPercent = (kPercentA * d * d) + (kPercentB * d) + kPercentC;
 		rawPercent = MathUtil.clamp(rawPercent, 0.0, 1.0);
 		// Aplicar suavizado (limitar cambio por segundo)
 		double smoothed = m_percentLimiter.calculate(rawPercent);
-		// Shooter forward convention: NEGATIVO
-		return -MathUtil.clamp(smoothed, -1.0, 1.0);
+		double percentCmd = -MathUtil.clamp(smoothed, 0.0, 1.0);
+
+		// Deadband de cambio: si cambia muy poquito, manten el valor previo.
+		if (Math.abs(percentCmd - m_lastPercentCmd) < kPercentChangeDeadband) {
+			return m_lastPercentCmd;
+		}
+		m_lastPercentCmd = percentCmd;
+		return percentCmd;
 	}
 
 	@Override
@@ -107,7 +118,8 @@ public class AsistedShooter extends SubsystemBase {
 		double targetPercentRaw = 0.0;
 		if (hasTag) {
 			targetRpmRaw = rpmForDistance(dist);
-			targetPercentRaw = (kExpA * Math.exp(kExpB * dist)) + kExpC;
+			double d = MathUtil.clamp(dist, kMinDistanceMeters, kMaxShootDistanceMeters);
+			targetPercentRaw = (kPercentA * d * d) + (kPercentB * d) + kPercentC;
 		}
 		SmartDashboard.putNumber("AssistShooter/TargetRPMRaw", targetRpmRaw);
 		SmartDashboard.putNumber("AssistShooter/TargetPercentRaw", targetPercentRaw);
