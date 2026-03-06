@@ -1,3 +1,4 @@
+//holaaa
 package frc.robot.subsystems;
 
 import edu.wpi.first.wpilibj.smartdashboard.SmartDashboard;
@@ -37,16 +38,14 @@ public class Shooter extends SubsystemBase {
 	private static final double kManualShooterPercent = -1.0;
 	private static final double kBeltPercent = 0.5;
 	private boolean m_assistedActive = false;
-	// Siempre encendido (idle): mantiene el shooter girando suave para evitar picos
-	// al momento de prenderlo. Sólo aplica cuando el robot está ENABLED.
-	private static final double kIdleSpinPercent = -0.15;
+	// Idle spin deshabilitado: el shooter SOLO se mueve cuando se ordena por botones/autos.
+	// (El ramp sigue activo para subir/bajar suave.)
 	private double m_targetPercent = 0.0;
 	private String m_lastShooterCommand = "none";
-	private static final String kIdleSpinEnabledKey = "Shooter/IdleSpin/Enabled";
-	private static final String kIdleSpinPercentKey = "Shooter/IdleSpin/Percent";
-	private boolean m_idleSpinEnabled = true;
-	private boolean m_idleSpinDashboardInitialized = false;
-	private boolean m_idleSpinPercentDashboardInitialized = false;
+	// Idle removido: dejamos un flag fijo solo para telemetría/compat
+	@SuppressWarnings("unused")
+	private boolean m_idleSpinEnabled = false;
+	@SuppressWarnings("unused")
 	private double m_lastIdleAppliedPercent = 0.0;
 	private String m_requestSource = "none";
 
@@ -55,11 +54,14 @@ public class Shooter extends SubsystemBase {
 	private static final double kNominalVoltage = 12.0;
 	private double m_commandedVolts = 0.0;
 
-	// "Kick" de arranque para vencer fricción estática (evita que arranque feo o titubee).
-	// 150ms ~= 8 ciclos de periodic (20ms.)
+	// Campos legacy (idle/kick) ya no se usan, pero los dejamos por estabilidad del archivo.
+	@SuppressWarnings("unused")
 	private static final int kStartupKickCycles = 8;
+	@SuppressWarnings("unused")
 	private static final double kStartupKickPercent = -0.70;
+	@SuppressWarnings("unused")
 	private int m_startupKickRemaining = 0;
+	@SuppressWarnings("unused")
 	private double m_lastRequestedPercent = 0.0;
 
 	public Shooter() {
@@ -148,37 +150,7 @@ public class Shooter extends SubsystemBase {
 	 * <p>Usado para el idle spin, para que no se convierta en un "kick" fuerte cada vez que
 	 * se prende/apaga desde Shuffleboard.
 	 */
-	private void setShooterPercentNoKick(double requestedPercent) {
-		if (m_hardStop) {
-			applyHardStop("blocked setShooterPercentNoKick(" + requestedPercent + ")");
-			return;
-		}
-		// Usar la misma rampa para idle/stop para que no regrese al idle de putazo.
-		double rampedPercent = applyRamp(requestedPercent);
-		m_lastRequestedPercent = rampedPercent;
-		m_startupKickRemaining = 0;
-
-		if (m_emergencyEnabled) {
-			m_lastShooterCommand = "percent_blocked_by_emergency";
-			m_targetPercent = kEmergencyPercent;
-			double targetVolts = kNominalVoltage * kEmergencyPercent;
-			m_commandedVolts = targetVolts;
-			m_shooterMotor51.setVoltage(targetVolts);
-			return;
-		}
-
-		m_targetPercent = requestedPercent;
-		double targetVolts = kNominalVoltage * rampedPercent;
-		m_commandedVolts = targetVolts;
-		m_requestSource = (Math.abs(requestedPercent) > 1e-6) ? "idle" : "idle_stop";
-		m_lastShooterCommand = String.format(
-			"idle_voltageCmd(%.2fV) target(%.3f) appliedRamped(%.3f) rampTimeS(%.2f)",
-			targetVolts,
-			requestedPercent,
-			rampedPercent,
-			m_rampTimeS);
-		m_shooterMotor51.setVoltage(targetVolts);
-	}
+	// setShooterPercentNoKick eliminado: era sólo para idle spin.
 
 	public void startManualShooter() {
 		m_assistedActive = false;
@@ -220,23 +192,11 @@ public class Shooter extends SubsystemBase {
 	 * (con rampa) en vez de quedarse en el ultimo setpoint alto.
 	 */
 	public void endShootAndReturnToIdle() {
+		// Compat: ahora que quitamos idle, esta función significa "terminar disparo y apagar".
+		// Se apaga con RAMPA (no es stop() en seco).
 		m_assistedActive = false;
-		m_requestSource = "return_to_idle";
-		// IMPORTANTE: NO reseteamos la rampa a 0 aqui.
-		// Queremos que el shooter baje SUAVE desde el valor actual hacia el idle (-0.15)
-		// respetando Shooter/Ramp/TimeS (tipicamente 0.5s).
-		// Usamos el valor de Shuffleboard si existe; si no, el default.
-		// OJO: si en Shuffleboard alguien dejo -0.40, se va a quedar ahi. Por eso publicamos
-		// el setpoint usado para que puedas confirmarlo.
-		double idlePercent = SmartDashboard.getNumber(kIdleSpinPercentKey, kIdleSpinPercent);
-		idlePercent = MathUtil.clamp(idlePercent, -0.40, 0.0);
-		SmartDashboard.putNumber("Shooter/IdleSpin/ReturnTargetPercent", idlePercent);
-		if (m_idleSpinEnabled) {
-			// Usa la misma rampa para transicionar al idle.
-			setShooterPercentNoKick(idlePercent);
-		} else {
-			setShooterPercentNoKick(0.0);
-		}
+		m_requestSource = "return_to_stop";
+		setShooterPercentInternal(0.0);
 	}
 
 	/**
@@ -246,7 +206,8 @@ public class Shooter extends SubsystemBase {
 	 * esté ENABLED y no haya un comando activo que lo sobre-escriba.
 	 */
 	public void setIdleSpinEnabled(boolean enabled) {
-		m_idleSpinEnabled = enabled;
+		// Idle deshabilitado por decisión de manejo: ignorar.
+		m_idleSpinEnabled = false;
 	}
 
 	public void stop() {
@@ -342,53 +303,30 @@ public class Shooter extends SubsystemBase {
 			applyHardStop("periodic");
 		}
 
-		// Toggle desde Shuffleboard:
-		//  - La primera vez publicamos el default (true)
-		//  - Después SOLO leemos, para no pisar lo que el usuario cambie.
-		if (!m_idleSpinDashboardInitialized) {
-			SmartDashboard.putBoolean(kIdleSpinEnabledKey, m_idleSpinEnabled);
-			m_idleSpinDashboardInitialized = true;
+		// Si ya no se está pidiendo shooter (target=0) pero aún quedó voltaje alto por la rampa,
+		// sigue aplicando la rampa hacia 0 en cada ciclo para asegurar que realmente se apague.
+		if (!m_hardStop
+				&& !m_emergencyEnabled
+				&& !m_assistedActive
+				&& Math.abs(m_targetPercent) < 1e-6
+				&& Math.abs(m_rampedPercent) > 1e-4) {
+			setShooterPercentInternal(0.0);
 		}
-		m_idleSpinEnabled = SmartDashboard.getBoolean(kIdleSpinEnabledKey, m_idleSpinEnabled);
 
-		// Percent tuneable desde Shuffleboard.
-		// Igual: publicar default una sola vez y luego sólo leer.
-		if (!m_idleSpinPercentDashboardInitialized) {
-			// Fuerza el default inicial a -0.15 (por si quedo un valor viejo en Shuffleboard).
-			SmartDashboard.putNumber(kIdleSpinPercentKey, kIdleSpinPercent);
-			m_idleSpinPercentDashboardInitialized = true;
-		}
-		double idlePercent = SmartDashboard.getNumber(kIdleSpinPercentKey, kIdleSpinPercent);
-		// Seguridad: idle no debería ser positivo ni demasiado alto.
-		idlePercent = edu.wpi.first.math.MathUtil.clamp(idlePercent, -0.40, 0.0);
-
-		// Si el robot está ENABLED y no hay un comando que esté pidiendo shooter,
-		// mantener un giro mínimo constante.
-		// Importante: NO correr en disabled (por seguridad) y NO pelear con emergencia.
-		boolean robotEnabled = edu.wpi.first.wpilibj.DriverStation.isEnabled();
-		boolean requestIsOff = Math.abs(m_lastRequestedPercent) <= 1e-6;
+		// Idle Spin eliminado: aquí NO comandamos el motor automáticamente.
 		m_lastIdleAppliedPercent = 0.0;
-		if (!m_hardStop && robotEnabled && !m_emergencyEnabled && requestIsOff) {
-			if (m_idleSpinEnabled) {
-				m_lastIdleAppliedPercent = idlePercent;
-				setShooterPercentNoKick(idlePercent);
-			} else {
-				// Si el idle está deshabilitado y nadie está pidiendo shooter, APAGARLO.
-				setShooterPercentNoKick(0.0);
-			}
-		}
 
 		// En modo voltaje NO necesitamos periodic para controlar, sólo para telemetría.
 		SmartDashboard.putBoolean("Shooter/EmergencyEnabled", m_emergencyEnabled);
 		SmartDashboard.putBoolean("Shooter/AssistedEnabled", m_assistedActive && !m_emergencyEnabled);
-		SmartDashboard.putBoolean("Shooter/IdleSpinEnabled", m_idleSpinEnabled);
+		SmartDashboard.putBoolean("Shooter/IdleSpinEnabled", false);
 		SmartDashboard.putBoolean("Shooter/HardStopActive", m_hardStop);
 		SmartDashboard.putNumber("Shooter/Ramp/TimeS", m_rampTimeS);
 		SmartDashboard.putNumber("Shooter/RequestedPercentRaw", m_lastRequestedPercentRaw);
 		SmartDashboard.putNumber("Shooter/AppliedPercentRamped", m_rampedPercent);
-		SmartDashboard.putNumber("Shooter/IdleSpinPercent", idlePercent);
-		SmartDashboard.putNumber("Shooter/IdleSpin/AppliedPercent", m_lastIdleAppliedPercent);
-		SmartDashboard.putNumber("Shooter/IdleSpin/AppliedVolts", kNominalVoltage * m_lastIdleAppliedPercent);
+		SmartDashboard.putNumber("Shooter/IdleSpinPercent", 0.0);
+		SmartDashboard.putNumber("Shooter/IdleSpin/AppliedPercent", 0.0);
+		SmartDashboard.putNumber("Shooter/IdleSpin/AppliedVolts", 0.0);
 		SmartDashboard.putNumber("Shooter/VelocityRPM", m_shooterEncoder.getVelocity());
 		SmartDashboard.putNumber("Shooter/VelocityRPMAbs", Math.abs(m_shooterEncoder.getVelocity()));
 		SmartDashboard.putNumber("Shooter/TargetPercent", m_targetPercent);

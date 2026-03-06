@@ -19,9 +19,12 @@ import edu.wpi.first.wpilibj.DriverStation;
 import edu.wpi.first.wpilibj.Filesystem;
 import edu.wpi.first.math.kinematics.ChassisSpeeds;
 import com.pathplanner.lib.auto.AutoBuilder;
+import com.pathplanner.lib.auto.NamedCommands;
 import com.pathplanner.lib.config.PIDConstants;
 import com.pathplanner.lib.config.RobotConfig;
 import com.pathplanner.lib.controllers.PPHolonomicDriveController;
+import edu.wpi.first.wpilibj2.command.Commands;
+import edu.wpi.first.wpilibj.Timer;
 import java.nio.file.DirectoryStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -49,11 +52,21 @@ public class RobotContainer {
     // Selector de autónomos (PathPlanner)
     private final SendableChooser<Command> m_autoChooser = new SendableChooser<>();
 
+    // Selector de configuración de controles
+    private enum ControlScheme {
+        TWO_CONTROLLERS,
+        ONE_CONTROLLER
+    }
+
+    private final SendableChooser<ControlScheme> m_controlSchemeChooser = new SendableChooser<>();
+
     // Debug/diagnóstico: si esto no sube a Shuffleboard, el jar nuevo NO está corriendo.
     private int m_rcHeartbeat = 0;
 
     // --- Angular / Intake ---
     private boolean m_intake100ToggleActive = false;
+    private boolean m_intakeToggleActive = false;
+    private boolean m_beltAuxToggleActive = false;
 
     // Angular jog (para calibración / reset 0)
     private boolean m_angularJogActive = false;
@@ -64,7 +77,7 @@ public class RobotContainer {
 
     // Shooter fallback (equivalente al viejo "-4000 RPM").
     // Mapea a porcentaje, y el subsistema Shooter lo convertirá a VOLTAJE.
-    private static final double kShooterFallbackPercent = -0.69;
+    private static final double kShooterFallbackPercent = -0.55;
 
     // AutoAim solo debe activarse si hay un tag válido visible.
     private boolean canEnableAutoAimNow() {
@@ -84,6 +97,7 @@ public class RobotContainer {
 
     public RobotContainer() {
         configurePathPlanner();
+        configureControlSchemeChooser();
         configureBindings();
 
         m_robotDrive.setDefaultCommand(
@@ -111,6 +125,13 @@ public class RobotContainer {
 
         // Publicar chooser al dashboard
         SmartDashboard.putData("Auto/Chooser", m_autoChooser);
+        SmartDashboard.putData("Controls/Chooser", m_controlSchemeChooser);
+    }
+
+    private void configureControlSchemeChooser() {
+        // Default = 2 controles (driver + operator)
+        m_controlSchemeChooser.setDefaultOption("2 controles", ControlScheme.TWO_CONTROLLERS);
+        m_controlSchemeChooser.addOption("1 control", ControlScheme.ONE_CONTROLLER);
     }
 
     /**
@@ -124,6 +145,131 @@ public class RobotContainer {
     private void configurePathPlanner() {
         SmartDashboard.putString("Auto/Status", "configuring");
         try {
+            // =========================
+            // PathPlanner NamedCommands (event markers)
+            // =========================
+            // Estos nombres deben coincidir EXACTO con los markers en PathPlanner.
+
+            // IntakeOn:
+            // 1) Bajar angular al mismo punto que el botón A
+            // 2) Esperar 0.5s
+            // 3) Prender intake (misma dirección que usabas en LT del operador)
+            NamedCommands.registerCommand(
+                "IntakeOn",
+                Commands.sequence(
+                    new InstantCommand(() -> m_angular.irAPosicion(-(360.0 * 31.5)), m_angular),
+                    Commands.waitSeconds(0.5),
+                    new InstantCommand(() -> m_intake.intakeReverse(), m_intake)
+                )
+            );
+
+            // IntakeOff: solo parar intake
+            NamedCommands.registerCommand(
+                "IntakeOff",
+                new InstantCommand(() -> m_intake.stop(), m_intake)
+            );
+
+            // ShooterOn:
+            // 1) Prender AutoAim
+            // 2) Esperar 0.5s
+            // 3) Prender shooter (assisted)
+            // 4) Esperar 1.0s
+            // 5) Prender bandas por 5.0s
+            NamedCommands.registerCommand(
+                "ShooterOn",
+                Commands.sequence(
+                    getAutoAimToggleCommand().onlyIf(() -> !m_robotDrive.isAutoAimEnabled()),
+                    Commands.waitSeconds(0.1),
+                    // Prender shooter (assisted/fallback) y sostenerlo prendido mientras corra el auto
+                    // por el tiempo de este evento (luego se apaga solo).
+                    new RunCommand(() -> {
+                        // Reusar EXACTO la misma lógica que el RT (sin necesidad de schedule())
+                        if (m_shooter.isEmergencyEnabled()) {
+                            SmartDashboard.putString("AssistShooter/Auto/Mode", "EMERGENCY_STOP");
+                            stopShooterAll();
+                            return;
+                        }
+
+                        double cmdPercent;
+
+                        if (!m_robotDrive.isAutoAimEnabled()) {
+                            cmdPercent = m_asistedShooter.applyPercentMultiplier(kShooterFallbackPercent);
+                            setAssistedShooterPercent(cmdPercent);
+                            SmartDashboard.putString("AssistShooter/Auto/Mode", "AUTOAIM_OFF_FALLBACK");
+                            return;
+                        }
+
+                        boolean hasTagNow = m_camara.hasAutoAimTag();
+                        if (hasTagNow) {
+                            m_autoAimTagPresentCycles = Math.min(kAutoAimTagDebounceCycles, m_autoAimTagPresentCycles + 1);
+                        } else {
+                            m_autoAimTagPresentCycles = Math.max(0, m_autoAimTagPresentCycles - 1);
+                        }
+
+                        boolean hasTagDebounced = m_autoAimTagPresentCycles >= kAutoAimTagDebounceCycles;
+                        boolean tooFar = m_camara.getAutoAimDistanceM() > 5.0;
+                        if (!hasTagDebounced || tooFar) {
+                            cmdPercent = m_asistedShooter.applyPercentMultiplier(kShooterFallbackPercent);
+                            setAssistedShooterPercent(cmdPercent);
+                            SmartDashboard.putString(
+                                "AssistShooter/Auto/Mode",
+                                !hasTagDebounced ? "AUTOAIM_NO_TAG_FALLBACK" : "AUTOAIM_TOO_FAR_FALLBACK");
+                            return;
+                        }
+
+                        if (m_asistedShooter.canShootNow()) {
+                            m_shooter.clearAssistedRequest();
+                            cmdPercent = m_asistedShooter.getDesiredPercent();
+                            if (!Double.isFinite(cmdPercent) || Math.abs(cmdPercent) < 1e-6) {
+                                cmdPercent = m_asistedShooter.applyPercentMultiplier(kShooterFallbackPercent);
+                                SmartDashboard.putString("AssistShooter/Auto/Mode", "ASSIST_INVALID_FALLBACK");
+                            } else {
+                                SmartDashboard.putString("AssistShooter/Auto/Mode", "ASSIST_PERCENT");
+                            }
+                            setAssistedShooterPercent(cmdPercent);
+                        } else {
+                            cmdPercent = m_asistedShooter.applyPercentMultiplier(kShooterFallbackPercent);
+                            setAssistedShooterPercent(cmdPercent);
+                            SmartDashboard.putString("AssistShooter/Auto/Mode", "ASSIST_CANT_SHOOT_FALLBACK");
+                        }
+                    }, m_asistedShooter, m_shooter).withTimeout(6.5),
+                    Commands.waitSeconds(1.0),
+                    Commands.startEnd(
+                            () -> {
+                                m_shooter.startBelt();
+                                m_auxMotor.startReverseAux();
+                            },
+                            () -> {
+                                m_shooter.stopBelt();
+                                m_auxMotor.stop();
+                            },
+                            m_shooter, m_auxMotor)
+                        .withTimeout(5.0),
+                    // Al terminar el evento, apagar shooter también (así siempre dura 5s de tiro total)
+                    new InstantCommand(() -> {
+                        m_asistedShooter.stop();
+                        m_shooter.clearAssistedRequest();
+                        // Volver al idle sí o sí
+                        m_shooter.endShootAndReturnToIdle();
+                    }, m_asistedShooter, m_shooter)
+                )
+            );
+
+            // ShooterOff: apagar shooter, autoaim y bandas
+            NamedCommands.registerCommand(
+                "ShooterOff",
+                new InstantCommand(() -> {
+                    m_asistedShooter.stop();
+                    m_shooter.clearAssistedRequest();
+                    // NO stop total: siempre volver al idle (-0.15) con rampa
+                    m_shooter.endShootAndReturnToIdle();
+                    m_shooter.stopBelt();
+                    m_auxMotor.stop();
+                    m_robotDrive.setAutoAimEnabled(false);
+                    SmartDashboard.putBoolean("AutoAim/EnabledRequested", false);
+                }, m_asistedShooter, m_shooter, m_auxMotor, m_robotDrive)
+            );
+
             // Validación previa: si al JSON le faltan keys, PathPlanner truena con NPE/Null.
             validatePPSettingsJson();
 
@@ -317,6 +463,20 @@ public class RobotContainer {
     }
 
     private void configureBindings() {
+        ControlScheme scheme = m_controlSchemeChooser.getSelected();
+        if (scheme == null) {
+            scheme = ControlScheme.TWO_CONTROLLERS;
+        }
+        SmartDashboard.putString("Controls/Selected", scheme == ControlScheme.ONE_CONTROLLER ? "1 control" : "2 controles");
+
+        if (scheme == ControlScheme.ONE_CONTROLLER) {
+            configureBindingsOneController();
+        } else {
+            configureBindingsTwoControllers();
+        }
+    }
+
+    private void configureBindingsTwoControllers() {
         // =========================
         // Control 0 (Driver) - Drivetrain
         // =========================
@@ -330,8 +490,6 @@ public class RobotContainer {
         m_driverController.x().onTrue(
             new InstantCommand(() -> m_robotDrive.zeroHeading(), m_robotDrive)
         );
-
-        // Driver POVLeft libre (debug / reservado)
 
         // LT del Driver: LIBRE (shooter ahora es solo del operador)
 
@@ -437,101 +595,16 @@ public class RobotContainer {
         // - Para prender AutoAim: debe haber tag válido visible (Camara.hasAutoAimTag()).
         // - Para apagarlo: siempre se permite.
         m_driverController.povLeft().onTrue(
-            new InstantCommand(() -> {
-                boolean wantEnable = !m_robotDrive.isAutoAimEnabled();
-                if (wantEnable && !canEnableAutoAimNow()) {
-                    // Si no hay un tag confiable, no habilitar AutoAim.
-                    m_robotDrive.setAutoAimEnabled(false);
-                    SmartDashboard.putBoolean("AutoAim/EnabledRequested", false);
-                    SmartDashboard.putString("AutoAim/EnableReject", "No valid tag");
-                    return;
-                }
-                m_robotDrive.setAutoAimEnabled(wantEnable);
-                SmartDashboard.putBoolean("AutoAim/EnabledRequested", wantEnable);
-                SmartDashboard.putString("AutoAim/EnableReject", "");
-            }, m_robotDrive)
+            getAutoAimToggleCommand()
         );
 
+        // Shooter Assisted (RT) en el operador
         m_operatorController.rightTrigger().whileTrue(
-            new RunCommand(
-                () -> {
-                    if (m_shooter.isEmergencyEnabled()) {
-                        SmartDashboard.putString("AssistShooter/RT/Mode", "EMERGENCY_STOP");
-                        stopShooterAll();
-                        return;
-                    }
-
-                    // Elegir UN percent a mandar este ciclo. No hagas stop+set en el mismo loop.
-                    double cmdPercent;
-
-                    // Reglas (porcentaje->voltaje):
-                    // 1) AutoAim OFF  -> shooter fijo (fallback)
-                    // 2) AutoAim ON pero SIN tag o >4m -> shooter fijo (fallback)
-                    // 3) AutoAim ON y tag válido (<=4m) -> AssistedShooter (fórmula -> %)
-                    if (!m_robotDrive.isAutoAimEnabled()) {
-                        cmdPercent = kShooterFallbackPercent;
-                        setAssistedShooterPercent(cmdPercent);
-                        SmartDashboard.putString("AssistShooter/RT/Mode", "AUTOAIM_OFF_FALLBACK");
-                        return;
-                    }
-
-                    // AutoAim ON
-                    boolean hasTagNow = m_camara.hasAutoAimTag();
-                    if (hasTagNow) {
-                        m_autoAimTagPresentCycles = Math.min(kAutoAimTagDebounceCycles, m_autoAimTagPresentCycles + 1);
-                    } else {
-                        m_autoAimTagPresentCycles = Math.max(0, m_autoAimTagPresentCycles - 1);
-                    }
-
-                    boolean hasTagDebounced = m_autoAimTagPresentCycles >= kAutoAimTagDebounceCycles;
-                    boolean tooFar = m_camara.getAutoAimDistanceM() > 5.0;
-                    if (!hasTagDebounced || tooFar) {
-                        cmdPercent = kShooterFallbackPercent;
-                        setAssistedShooterPercent(cmdPercent);
-                        SmartDashboard.putString("AssistShooter/RT/Mode", !hasTagDebounced ? "AUTOAIM_NO_TAG_FALLBACK" : "AUTOAIM_TOO_FAR_FALLBACK");
-                        return;
-                    }
-
-                    // AutoAim ON + tag dentro de 5m
-                    if (m_asistedShooter.canShootNow()) {
-                        // NO mandar stop aqui: eso pelea con el assisted y puede hacer que caiga a 0 por la rampa.
-                        // Solo aseguramos que no este latcheado un modo anterior.
-                        m_shooter.clearAssistedRequest();
-                        cmdPercent = m_asistedShooter.getDesiredPercent();
-                        // Seguridad: si por alguna razon sale 0 o NaN, usa fallback.
-                        if (!Double.isFinite(cmdPercent) || Math.abs(cmdPercent) < 1e-6) {
-                            cmdPercent = kShooterFallbackPercent;
-                            SmartDashboard.putString("AssistShooter/RT/Mode", "ASSIST_INVALID_FALLBACK");
-                        } else {
-                            SmartDashboard.putString("AssistShooter/RT/Mode", "ASSIST_PERCENT");
-                        }
-                        setAssistedShooterPercent(cmdPercent);
-                    } else {
-                        // Si por alguna razón canShootNow() no deja (distancia 0, etc.), usar el fallback fuerte
-                        cmdPercent = kShooterFallbackPercent;
-                        setAssistedShooterPercent(cmdPercent);
-                        SmartDashboard.putString("AssistShooter/RT/Mode", "ASSIST_CANT_SHOOT_FALLBACK");
-                    }
-
-                    SmartDashboard.putNumber("AssistShooter/RT/CmdPercent", cmdPercent);
-                    SmartDashboard.putBoolean("AssistShooter/RT/AutoAimEnabled", m_robotDrive.isAutoAimEnabled());
-                    SmartDashboard.putBoolean("AssistShooter/RT/HasTag", m_camara.hasAutoAimTag());
-                    SmartDashboard.putNumber("AssistShooter/RT/DistanceM", m_camara.getAutoAimDistanceM());
-                },
-                m_asistedShooter, m_shooter)
+            getAssistedShooterCommandLoop()
         ).onFalse(
-            new InstantCommand(() -> {
-                // Al soltar RT: NO forzar un stop total.
-                // Dejamos que el "idle spin" del subsistema Shooter se encargue de mantenerlo girando
-                // (o apagarlo si el idle está deshabilitado / HardStop está activo).
-                m_asistedShooter.stop();
-                // Importante: quita el estado de assisted para que no se quede "pegado".
-                m_shooter.clearAssistedRequest();
-                m_shooter.endShootAndReturnToIdle();
-                m_shooter.stopBelt();
-                m_auxMotor.stop();
-            }, m_asistedShooter, m_shooter, m_auxMotor)
+            getAssistedShooterReleaseCommand()
         );
+
         // X (while held): Banda + AuxMotor
         m_operatorController.x().whileTrue(
             new RunCommand(() -> {
@@ -543,6 +616,33 @@ public class RobotContainer {
                 m_shooter.stopBelt();
                 m_auxMotor.stop();
             }, m_shooter, m_auxMotor)
+        );
+
+        // POVDown (tap): girar 180° (media vuelta) - mismo comportamiento que en 1 control
+        m_operatorController.povDown().onTrue(
+            Commands.sequence(
+                new InstantCommand(() -> SmartDashboard.putString("Drive/Turn180/State", "START")),
+                // Pequeño pulso de giro. Ajusta Drive/Turn180/RotCmd y Drive/Turn180/TimeS desde Shuffleboard.
+                Commands.runOnce(() -> {
+                    double rotCmd = SmartDashboard.getNumber("Drive/Turn180/RotCmd", 0.85);
+                    double timeS = SmartDashboard.getNumber("Drive/Turn180/TimeS", 0.75);
+                    rotCmd = MathUtil.clamp(rotCmd, -1.0, 1.0);
+                    timeS = MathUtil.clamp(timeS, 0.1, 2.0);
+                    SmartDashboard.putNumber("Drive/Turn180/RotCmdApplied", rotCmd);
+                    SmartDashboard.putNumber("Drive/Turn180/TimeSApplied", timeS);
+                    SmartDashboard.putNumber("Drive/Turn180/T0", Timer.getFPGATimestamp());
+                }),
+                Commands.run(() -> {
+                        double rotCmd = SmartDashboard.getNumber("Drive/Turn180/RotCmdApplied", 0.85);
+                        m_robotDrive.setRotationOverride(rotCmd);
+                        SmartDashboard.putString("Drive/Turn180/State", "TURNING");
+                    }, m_robotDrive)
+                    .withTimeout(SmartDashboard.getNumber("Drive/Turn180/TimeSApplied", 0.75)),
+                new InstantCommand(() -> {
+                    m_robotDrive.clearRotationOverride();
+                    SmartDashboard.putString("Drive/Turn180/State", "DONE");
+                }, m_robotDrive)
+            )
         );
 
         // PovDown (while held): Banda + AuxMotor
@@ -580,8 +680,237 @@ public class RobotContainer {
             new InstantCommand(() -> m_angular.resetEncoder(), m_angular)
         );
 
-
         // Nota: el toggle de AutoAim se movió al driver (POVLeft).
+    }
+
+    private void configureBindingsOneController() {
+        // =========================
+        // 1 Control (Driver) - TODO en el driver
+        // =========================
+
+        // RB: freno en seco (setX)
+        m_driverController.rightBumper().whileTrue(
+            new RunCommand(() -> m_robotDrive.setX(), m_robotDrive)
+        );
+
+        // POVLeft: Toggle AutoAim
+        m_driverController.povLeft().onTrue(
+            getAutoAimToggleCommand()
+        );
+
+        // RT: Shooter
+        m_driverController.rightTrigger().whileTrue(
+            getAssistedShooterCommandLoop()
+        ).onFalse(
+            getAssistedShooterReleaseCommand()
+        );
+
+        // LT: Intake toggle (nota: en este robot los nombres forward/reverse están invertidos respecto a física;
+        // mantenemos lo que ya funcionaba: LT en operador llamaba intakeReverse())
+        m_driverController.leftTrigger().onTrue(
+            new InstantCommand(() -> {
+                if (m_intake100ToggleActive) {
+                    return;
+                }
+                m_intakeToggleActive = !m_intakeToggleActive;
+                if (m_intakeToggleActive) {
+                    m_intake.intakeReverse();
+                } else {
+                    m_intake.stop();
+                }
+            }, m_intake)
+        );
+
+        // LB: Intake para atrás
+        m_driverController.leftBumper().whileTrue(
+            new RunCommand(() -> m_intake.intakeForward(), m_intake)
+        ).onFalse(
+            new InstantCommand(() -> m_intake.stop(), m_intake)
+        );
+
+        // X: bandas + auxiliar (toggle)
+        m_driverController.x().onTrue(
+            new InstantCommand(() -> {
+                m_beltAuxToggleActive = !m_beltAuxToggleActive;
+                if (m_beltAuxToggleActive) {
+                    m_shooter.startBelt();
+                    m_auxMotor.startReverseAux();
+                } else {
+                    m_shooter.stopBelt();
+                    m_auxMotor.stop();
+                }
+            }, m_shooter, m_auxMotor)
+        );
+
+        // Y: Angular home
+        m_driverController.y().onTrue(
+            new InstantCommand(() -> m_angular.irAPosicion((-360 * 3)), m_angular)
+        );
+
+        // A: Angular abajo
+        m_driverController.a().onTrue(
+            new InstantCommand(() -> m_angular.irAPosicion(-(360.0 * 31.5)), m_angular)
+        );
+
+        // B: ciclo anti-atoradas
+        m_driverController.b().onTrue(
+            new InstantCommand(() -> m_angular.setUnjamCycleEnabled(true), m_angular)
+        );
+
+        // POVRight (while held): subir Angular manual (open-loop) para calibración
+        m_driverController.povRight().whileTrue(
+            new RunCommand(() -> {
+                if (!m_angularJogActive) {
+                    m_angularJogActive = true;
+                }
+                m_angular.setOpenLoopPercent(0.30);
+            }, m_angular)
+        ).onFalse(
+            new InstantCommand(() -> {
+                m_angularJogActive = false;
+                m_angular.holdCurrentPosition();
+            }, m_angular)
+        );
+
+        // START: set 0 del Angular
+        m_driverController.start().onTrue(
+            new InstantCommand(() -> m_angular.resetEncoder(), m_angular)
+        );
+
+        // BACK: set 0 de la IMU (swerves)
+        m_driverController.back().onTrue(
+            new InstantCommand(() -> m_robotDrive.zeroHeading(), m_robotDrive)
+        );
+
+        // POVDown (tap): girar 180° (media vuelta)
+        // Implementación simple/robusta: aplicar una rotación fija por un tiempo y luego soltar.
+        // (Si quieres absoluto por heading con PID, lo hacemos después.)
+        m_driverController.povDown().onTrue(
+            Commands.sequence(
+                new InstantCommand(() -> SmartDashboard.putString("Drive/Turn180/State", "START")),
+                // Pequeño pulso de giro. Ajusta Drive/Turn180/RotCmd y Drive/Turn180/TimeS desde Shuffleboard.
+                Commands.runOnce(() -> {
+                    double rotCmd = SmartDashboard.getNumber("Drive/Turn180/RotCmd", 0.85);
+                    double timeS = SmartDashboard.getNumber("Drive/Turn180/TimeS", 0.75);
+                    rotCmd = MathUtil.clamp(rotCmd, -1.0, 1.0);
+                    timeS = MathUtil.clamp(timeS, 0.1, 2.0);
+                    SmartDashboard.putNumber("Drive/Turn180/RotCmdApplied", rotCmd);
+                    SmartDashboard.putNumber("Drive/Turn180/TimeSApplied", timeS);
+                    SmartDashboard.putNumber("Drive/Turn180/T0", Timer.getFPGATimestamp());
+                }),
+                Commands.run(() -> {
+                        double rotCmd = SmartDashboard.getNumber("Drive/Turn180/RotCmdApplied", 0.85);
+                        m_robotDrive.setRotationOverride(rotCmd);
+                        SmartDashboard.putString("Drive/Turn180/State", "TURNING");
+                    }, m_robotDrive)
+                    .withTimeout(SmartDashboard.getNumber("Drive/Turn180/TimeSApplied", 0.75)),
+                new InstantCommand(() -> {
+                    m_robotDrive.clearRotationOverride();
+                    SmartDashboard.putString("Drive/Turn180/State", "DONE");
+                }, m_robotDrive)
+            )
+        );
+    }
+
+    private Command getAutoAimToggleCommand() {
+        return new InstantCommand(() -> {
+            boolean wantEnable = !m_robotDrive.isAutoAimEnabled();
+            if (wantEnable && !canEnableAutoAimNow()) {
+                // Si no hay un tag confiable, no habilitar AutoAim.
+                m_robotDrive.setAutoAimEnabled(false);
+                SmartDashboard.putBoolean("AutoAim/EnabledRequested", false);
+                SmartDashboard.putString("AutoAim/EnableReject", "No valid tag");
+                return;
+            }
+            m_robotDrive.setAutoAimEnabled(wantEnable);
+            SmartDashboard.putBoolean("AutoAim/EnabledRequested", wantEnable);
+            SmartDashboard.putString("AutoAim/EnableReject", "");
+        }, m_robotDrive);
+    }
+
+    private Command getAssistedShooterCommandLoop() {
+        return new RunCommand(
+            () -> {
+                if (m_shooter.isEmergencyEnabled()) {
+                    SmartDashboard.putString("AssistShooter/RT/Mode", "EMERGENCY_STOP");
+                    stopShooterAll();
+                    return;
+                }
+
+                // Elegir UN percent a mandar este ciclo. No hagas stop+set en el mismo loop.
+                double cmdPercent;
+
+                // Reglas (porcentaje->voltaje):
+                // 1) AutoAim OFF  -> shooter fijo (fallback)
+                // 2) AutoAim ON pero SIN tag o >5m -> shooter fijo (fallback)
+                // 3) AutoAim ON y tag válido (<=5m) -> AssistedShooter (fórmula -> %)
+                if (!m_robotDrive.isAutoAimEnabled()) {
+                    cmdPercent = m_asistedShooter.applyPercentMultiplier(kShooterFallbackPercent);
+                    setAssistedShooterPercent(cmdPercent);
+                    SmartDashboard.putString("AssistShooter/RT/Mode", "AUTOAIM_OFF_FALLBACK");
+                    return;
+                }
+
+                // AutoAim ON
+                boolean hasTagNow = m_camara.hasAutoAimTag();
+                if (hasTagNow) {
+                    m_autoAimTagPresentCycles = Math.min(kAutoAimTagDebounceCycles, m_autoAimTagPresentCycles + 1);
+                } else {
+                    m_autoAimTagPresentCycles = Math.max(0, m_autoAimTagPresentCycles - 1);
+                }
+
+                boolean hasTagDebounced = m_autoAimTagPresentCycles >= kAutoAimTagDebounceCycles;
+                boolean tooFar = m_camara.getAutoAimDistanceM() > 5.0;
+                if (!hasTagDebounced || tooFar) {
+                    cmdPercent = m_asistedShooter.applyPercentMultiplier(kShooterFallbackPercent);
+                    setAssistedShooterPercent(cmdPercent);
+                    SmartDashboard.putString(
+                        "AssistShooter/RT/Mode",
+                        !hasTagDebounced ? "AUTOAIM_NO_TAG_FALLBACK" : "AUTOAIM_TOO_FAR_FALLBACK");
+                    return;
+                }
+
+                // AutoAim ON + tag dentro de 5m
+                if (m_asistedShooter.canShootNow()) {
+                    // NO mandar stop aqui: eso pelea con el assisted y puede hacer que caiga a 0 por la rampa.
+                    // Solo aseguramos que no este latcheado un modo anterior.
+                    m_shooter.clearAssistedRequest();
+                    cmdPercent = m_asistedShooter.getDesiredPercent();
+                    // Seguridad: si por alguna razon sale 0 o NaN, usa fallback.
+                    if (!Double.isFinite(cmdPercent) || Math.abs(cmdPercent) < 1e-6) {
+                        cmdPercent = m_asistedShooter.applyPercentMultiplier(kShooterFallbackPercent);
+                        SmartDashboard.putString("AssistShooter/RT/Mode", "ASSIST_INVALID_FALLBACK");
+                    } else {
+                        SmartDashboard.putString("AssistShooter/RT/Mode", "ASSIST_PERCENT");
+                    }
+                    setAssistedShooterPercent(cmdPercent);
+                } else {
+                    // Si por alguna razón canShootNow() no deja (distancia 0, etc.), usar el fallback fuerte
+                    cmdPercent = m_asistedShooter.applyPercentMultiplier(kShooterFallbackPercent);
+                    setAssistedShooterPercent(cmdPercent);
+                    SmartDashboard.putString("AssistShooter/RT/Mode", "ASSIST_CANT_SHOOT_FALLBACK");
+                }
+
+                SmartDashboard.putNumber("AssistShooter/RT/CmdPercent", cmdPercent);
+                SmartDashboard.putBoolean("AssistShooter/RT/AutoAimEnabled", m_robotDrive.isAutoAimEnabled());
+                SmartDashboard.putBoolean("AssistShooter/RT/HasTag", m_camara.hasAutoAimTag());
+                SmartDashboard.putNumber("AssistShooter/RT/DistanceM", m_camara.getAutoAimDistanceM());
+            },
+            m_asistedShooter, m_shooter);
+    }
+
+    private Command getAssistedShooterReleaseCommand() {
+        return new InstantCommand(() -> {
+            // Al soltar RT: NO forzar un stop total.
+            // Dejamos que el "idle spin" del subsistema Shooter se encargue de mantenerlo girando
+            // (o apagarlo si el idle está deshabilitado / HardStop está activo).
+            m_asistedShooter.stop();
+            // Importante: quita el estado de assisted para que no se quede "pegado".
+            m_shooter.clearAssistedRequest();
+            m_shooter.endShootAndReturnToIdle();
+            m_shooter.stopBelt();
+            m_auxMotor.stop();
+        }, m_asistedShooter, m_shooter, m_auxMotor);
     }
 
     public Command getAutonomousCommand() {

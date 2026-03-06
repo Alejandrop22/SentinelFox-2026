@@ -27,6 +27,35 @@ public class AsistedShooter extends SubsystemBase {
 	private static final double kPercentChangeDeadband = 0.02;
 	private double m_lastPercentCmd = 0.0;
 
+	// Multiplicador tuneable (Shuffleboard): permite ajustar el resultado final sin tocar la curva.
+	// Ejemplo: 0.95 = 5% menos velocidad.
+	private static final String kAssistPercentMultiplierKey = "AssistShooter/PercentMultiplier";
+	private boolean m_multiplierDashboardInitialized = false;
+
+	//multiplier del SHOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOTER
+	private double m_percentMultiplier = 1.9;
+
+	private void ensureMultiplierRead() {
+		if (!m_multiplierDashboardInitialized) {
+			SmartDashboard.putNumber(kAssistPercentMultiplierKey, m_percentMultiplier);
+			m_multiplierDashboardInitialized = true;
+		}
+		m_percentMultiplier = SmartDashboard.getNumber(kAssistPercentMultiplierKey, m_percentMultiplier);
+		m_percentMultiplier = MathUtil.clamp(m_percentMultiplier, 0.70, 1.30);
+		SmartDashboard.putNumber("AssistShooter/PercentMultiplierApplied", m_percentMultiplier);
+	}
+
+	/** Aplica el multiplicador de Shuffleboard a un percent (negativo = forward). */
+	public double applyPercentMultiplier(double percentRaw) {
+		ensureMultiplierRead();
+		double scaled = percentRaw * m_percentMultiplier;
+		// Shooter forward convention: NEGATIVO. No permitimos positivo aqui.
+		scaled = MathUtil.clamp(scaled, -1.0, 0.0);
+		SmartDashboard.putNumber("AssistShooter/FallbackPercentRaw", percentRaw);
+		SmartDashboard.putNumber("AssistShooter/FallbackPercentScaled", scaled);
+		return scaled;
+	}
+
 	// Curva confirmada por ti: rpm(x) = -33x^2 + 642x + 3800
 	// x está en METROS.
 	private static final double kA = -33.0;
@@ -88,6 +117,8 @@ public class AsistedShooter extends SubsystemBase {
 	 * (shooter "forward" es negativo). Se aplica un límite y un suavizado leve.
 	 */
 	public double getDesiredPercent() {
+		ensureMultiplierRead();
+
 		double dist = getAutoAimDistanceMeters();
 		// Clamp distancia válida para la curva
 		double d = MathUtil.clamp(dist, kMinDistanceMeters, kMaxShootDistanceMeters);
@@ -96,7 +127,12 @@ public class AsistedShooter extends SubsystemBase {
 		rawPercent = MathUtil.clamp(rawPercent, 0.0, 1.0);
 		// Aplicar suavizado (limitar cambio por segundo)
 		double smoothed = m_percentLimiter.calculate(rawPercent);
-		double percentCmd = -MathUtil.clamp(smoothed, 0.0, 1.0);
+		double percentCmdRaw = -MathUtil.clamp(smoothed, 0.0, 1.0);
+		SmartDashboard.putNumber("AssistShooter/DesiredPercentRaw", percentCmdRaw);
+
+		// Aplicar multiplicador
+		double percentCmd = MathUtil.clamp(percentCmdRaw * m_percentMultiplier, -1.0, 0.0);
+		SmartDashboard.putNumber("AssistShooter/DesiredPercentScaled", percentCmd);
 
 		// Deadband de cambio: si cambia muy poquito, manten el valor previo.
 		if (Math.abs(percentCmd - m_lastPercentCmd) < kPercentChangeDeadband) {
