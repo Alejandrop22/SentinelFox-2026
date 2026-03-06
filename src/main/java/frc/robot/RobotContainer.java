@@ -11,6 +11,7 @@ import frc.robot.subsystems.Intake;
 import frc.robot.subsystems.Shooter;
 import frc.robot.subsystems.AuxMotor;
 import frc.robot.subsystems.AsistedShooter;
+import frc.robot.subsystems.Solenoides;
 import edu.wpi.first.wpilibj2.command.InstantCommand;
 import frc.robot.Constants.OIConstants;
 import edu.wpi.first.wpilibj.smartdashboard.SendableChooser;
@@ -44,6 +45,7 @@ public class RobotContainer {
     private final Shooter m_shooter = new Shooter();
     private final AsistedShooter m_asistedShooter = new AsistedShooter(m_camara);
     private final AuxMotor m_auxMotor = new AuxMotor();
+    private final Solenoides m_solenoides = new Solenoides();
     // Control 0 = drivetrain (driver)
     private final CommandXboxController m_driverController = new CommandXboxController(0);
     // Control 1 = subsistemas (operator)
@@ -580,14 +582,9 @@ public class RobotContainer {
             new InstantCommand(() -> m_angular.irAPosicion(-(360.0 * 17)), m_angular)
         );
 
-        // POVLeft (while held): Shooter open-loop DEBUG (-20%)
-        // Esto NO usa PID/velocity. Sirve para ver si el motor/cableado responde.
-        m_operatorController.povLeft().whileTrue(
-            new RunCommand(() -> m_shooter.debugSetShooterPercent(-0.20), m_shooter)
-        ).onFalse(
-            // Al soltar este debug, NO hagas un stop total (0V), porque eso pelea con el idle spin
-            // y puede verse como que el shooter "se va a 0" cuando estas haciendo AutoAim.
-            new InstantCommand(() -> m_shooter.stopManualShooter(), m_shooter)
+        // POVLeft (tap): Solenoides -> alternar ambos (A y B)
+        m_operatorController.povLeft().onTrue(
+            new InstantCommand(() -> m_solenoides.alternarAmbos(), m_solenoides)
         );
 
         // Driver POVLeft (one-shot): Toggle AutoAim ON/OFF
