@@ -72,6 +72,8 @@ public class Camara extends SubsystemBase {
     private static final String kVisionTrenchXKey = "Vision/Trench/X";
     private static final String kVisionTrenchYKey = "Vision/Trench/Y";
 
+    private static final String kVisionCameraConnectedKey = "Vision/Camera/Connected";
+
     /**
      * Resultado de geometría usando el vector corregido (como si midiera desde el centro del robot).
      * yawDeg: +izquierda (si Y+ es izquierda), -derecha.
@@ -203,6 +205,25 @@ public class Camara extends SubsystemBase {
         SmartDashboard.putNumber(kVisionAutoAimYawRawDegKey, 0);
         SmartDashboard.putNumber(kVisionAutoAimYawOffsetDegKey, kCameraYawOffsetDeg);
         SmartDashboard.putNumber(kVisionAutoAimRightOffsetMKey, rightOffsetM);
+
+        boolean cameraConnected = m_camera.isConnected();
+        SmartDashboard.putBoolean(kVisionCameraConnectedKey, cameraConnected);
+
+        if (!cameraConnected) {
+            // Si no hay cámara, no intentes leer resultados (evita errores y deja todo en default).
+            has_trench_tag = false;
+            trench_tag_id = 0;
+            trench_yaw_deg = 0;
+            trench_distance_m = 0;
+            trench_x_m = 0;
+            trench_y_m = 0;
+
+            has_autoaim_tag = false;
+            autoaim_tag_id = 0;
+            autoaim_yaw_deg = 0;
+            autoaim_distance_m = 0;
+            return;
+        }
 
         PhotonPipelineResult result = m_camera.getLatestResult();
 

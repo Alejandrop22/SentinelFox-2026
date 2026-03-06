@@ -33,7 +33,7 @@ public class AsistedShooter extends SubsystemBase {
 	private boolean m_multiplierDashboardInitialized = false;
 
 	//multiplier del SHOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOTER
-	private double m_percentMultiplier = 1.9;
+	private double m_percentMultiplier = 1.05;
 
 	private void ensureMultiplierRead() {
 		if (!m_multiplierDashboardInitialized) {

@@ -1,46 +1,60 @@
 package frc.robot.subsystems;
 
-import edu.wpi.first.wpilibj.DoubleSolenoid;
 import edu.wpi.first.wpilibj.PneumaticHub;
+import edu.wpi.first.wpilibj.Solenoid;
 import edu.wpi.first.wpilibj2.command.SubsystemBase;
 
 public class Solenoides extends SubsystemBase {
     private final PneumaticHub pneumaticHub;
-    private final DoubleSolenoid solenoideA;
-    private final DoubleSolenoid solenoideB;
+    private final Solenoid extendA;
+    private final Solenoid extendB;
+    private final Solenoid retractA;
+    private final Solenoid retractB;
+    private boolean m_extended = false;
 
     public Solenoides() {
-        this(1, 0, 1, 2, 3);
+        this(60, 0, 1, 2, 3);
     }
 
-    public Solenoides(int canIdHub, int aForwardChannel, int aReverseChannel, int bForwardChannel, int bReverseChannel) {
+    public Solenoides(int canIdHub, int aExtendChannel, int bExtendChannel, int aRetractChannel, int bRetractChannel) {
         pneumaticHub = new PneumaticHub(canIdHub);
         pneumaticHub.enableCompressorDigital();
 
-        solenoideA = pneumaticHub.makeDoubleSolenoid(aForwardChannel, aReverseChannel);
-        solenoideB = pneumaticHub.makeDoubleSolenoid(bForwardChannel, bReverseChannel);
+        extendA = pneumaticHub.makeSolenoid(aExtendChannel);
+        extendB = pneumaticHub.makeSolenoid(bExtendChannel);
+        retractA = pneumaticHub.makeSolenoid(aRetractChannel);
+        retractB = pneumaticHub.makeSolenoid(bRetractChannel);
+        apagarAmbos();
     }
 
     public void extenderAmbos() {
-        solenoideA.set(DoubleSolenoid.Value.kForward);
-        solenoideB.set(DoubleSolenoid.Value.kForward);
+        extendA.set(true);
+        extendB.set(true);
+        retractA.set(false);
+        retractB.set(false);
+        m_extended = true;
     }
 
     public void retraerAmbos() {
-        solenoideA.set(DoubleSolenoid.Value.kReverse);
-        solenoideB.set(DoubleSolenoid.Value.kReverse);
+        extendA.set(false);
+        extendB.set(false);
+        retractA.set(true);
+        retractB.set(true);
+        m_extended = false;
     }
 
     public void apagarAmbos() {
-        solenoideA.set(DoubleSolenoid.Value.kOff);
-        solenoideB.set(DoubleSolenoid.Value.kOff);
+        extendA.set(false);
+        extendB.set(false);
+        retractA.set(false);
+        retractB.set(false);
     }
 
     public void alternarAmbos() {
-        if (solenoideA.get() == DoubleSolenoid.Value.kForward) {
+        if (m_extended) {
             retraerAmbos();
-        } else {
-            extenderAmbos();
+            return;
         }
+        extenderAmbos();
     }
 }
