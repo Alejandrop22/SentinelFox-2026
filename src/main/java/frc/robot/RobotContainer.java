@@ -7,68 +7,81 @@ import edu.wpi.first.wpilibj2.command.RunCommand;
 import frc.robot.subsystems.DriveSubsystem;
 import frc.robot.subsystems.Camara;
 import frc.robot.subsystems.Angular;
+import frc.robot.subsystems.Align;
 import frc.robot.subsystems.Intake;
 import frc.robot.subsystems.Shooter;
 import frc.robot.subsystems.AuxMotor;
 import frc.robot.subsystems.AsistedShooter;
 import frc.robot.subsystems.Solenoides;
 import edu.wpi.first.wpilibj2.command.InstantCommand;
+import edu.wpi.first.wpilibj2.command.CommandScheduler;
 import frc.robot.Constants.OIConstants;
 import edu.wpi.first.wpilibj.smartdashboard.SendableChooser;
 import edu.wpi.first.wpilibj.smartdashboard.SmartDashboard;
 import edu.wpi.first.wpilibj.DriverStation;
 import edu.wpi.first.wpilibj.Filesystem;
+import edu.wpi.first.wpilibj2.command.Commands;
 import edu.wpi.first.math.kinematics.ChassisSpeeds;
+import edu.wpi.first.wpilibj.Timer;
 import com.pathplanner.lib.auto.AutoBuilder;
 import com.pathplanner.lib.auto.NamedCommands;
 import com.pathplanner.lib.config.PIDConstants;
 import com.pathplanner.lib.config.RobotConfig;
 import com.pathplanner.lib.controllers.PPHolonomicDriveController;
-import edu.wpi.first.wpilibj2.command.Commands;
-import edu.wpi.first.wpilibj.Timer;
+import com.pathplanner.lib.path.PathPlannerPath;
 import java.nio.file.DirectoryStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import org.json.simple.JSONObject;
 import org.json.simple.parser.JSONParser;
 
 public class RobotContainer {
+
     private static final double kDriveScale = 1.0;
 
     private final Camara m_camara = new Camara();
     private final DriveSubsystem m_robotDrive = new DriveSubsystem(m_camara);
     private final Angular m_angular = new Angular();
+    private final Command m_alignCommand = Align.createOneShotCommand(m_robotDrive, m_camara);
     private final Intake m_intake = new Intake();
     private final Shooter m_shooter = new Shooter();
     private final AsistedShooter m_asistedShooter = new AsistedShooter(m_camara);
     private final AuxMotor m_auxMotor = new AuxMotor();
     private final Solenoides m_solenoides = new Solenoides();
-    // Control 0 = drivetrain (driver)
-    private final CommandXboxController m_driverController = new CommandXboxController(0);
-    // Control 1 = subsistemas (operator)
+
+    private final CommandXboxController m_driverController =
+        new CommandXboxController(OIConstants.kDriverControllerPort);
     private final CommandXboxController m_operatorController = new CommandXboxController(1);
 
-    // Selector de autónomos (PathPlanner)
     private SendableChooser<Command> m_autoChooser = new SendableChooser<>();
+    private final Map<String, Command> m_autoOptions = new LinkedHashMap<>();
+    private boolean m_autoConfigured = false;
 
-    // Selector de configuración de controles
-    private enum ControlScheme {
-        TWO_CONTROLLERS,
-        ONE_CONTROLLER
-    }
-
-    private final SendableChooser<ControlScheme> m_controlSchemeChooser = new SendableChooser<>();
-
-    // Debug/diagnóstico: si esto no sube a Shuffleboard, el jar nuevo NO está corriendo.
     private int m_rcHeartbeat = 0;
 
-    // --- Angular / Intake ---
     private boolean m_intake100ToggleActive = false;
     private boolean m_intakeToggleActive = false;
     private boolean m_beltAuxToggleActive = false;
+    private boolean m_angularOscillateActive = false;
+    private boolean m_angularOscillateForward = true;
+    private double m_angularOscillateHomeDeg = 0.0;
+    private double m_angularOscillateBackDeg = 0.0;
+    private static final double kAngularHomeDeg = 0.0;
+    private static final double kAngularOscillateTolDeg = 15.0;
+    private static final double kAngularOscillateDeltaDeg = 360.0 * 5.0;
+    private final Command m_angularOscillateCommand = new RunCommand(() -> {
+        double target = m_angularOscillateForward ? m_angularOscillateHomeDeg : m_angularOscillateBackDeg;
+        m_angular.irAPosicion(target);
+        if (Math.abs(m_angular.getPositionDeg() - target) <= kAngularOscillateTolDeg) {
+            m_angularOscillateForward = !m_angularOscillateForward;
+        }
+    }, m_angular);
+
 
     // Angular jog (para calibración / reset 0)
     private boolean m_angularJogActive = false;
@@ -79,8 +92,7 @@ public class RobotContainer {
 
     // Shooter fallback (equivalente al viejo "-4000 RPM").
     // Mapea a porcentaje, y el subsistema Shooter lo convertirá a VOLTAJE.
-    private static final double kShooterFallbackPercent = -0.55;
-
+    private static final double kShooterFallbackPercent = -1.0;
     // AutoAim solo debe activarse si hay un tag válido visible.
     private boolean canEnableAutoAimNow() {
         return m_camara.hasAutoAimTag() && m_camara.getAutoAimTagId() != 0;
@@ -99,8 +111,8 @@ public class RobotContainer {
 
     public RobotContainer() {
         configurePathPlanner();
-        configureControlSchemeChooser();
-        configureBindings();
+    configureBindingsTwoControllers();
+        Align.publishDefaults();
 
         m_robotDrive.setDefaultCommand(
             new RunCommand(
@@ -125,15 +137,8 @@ public class RobotContainer {
                 },
                 m_robotDrive));
 
-        // Publicar chooser al dashboard
+        // Publicar choosers al dashboard
         SmartDashboard.putData("Auto/Chooser", m_autoChooser);
-        SmartDashboard.putData("Controls/Chooser", m_controlSchemeChooser);
-    }
-
-    private void configureControlSchemeChooser() {
-        // Default = 2 controles (driver + operator)
-        m_controlSchemeChooser.setDefaultOption("2 controles", ControlScheme.TWO_CONTROLLERS);
-        m_controlSchemeChooser.addOption("1 control", ControlScheme.ONE_CONTROLLER);
     }
 
     /**
@@ -144,8 +149,73 @@ public class RobotContainer {
         SmartDashboard.putNumber("RC/Heartbeat", m_rcHeartbeat++);
     }
 
+    private List<String> readAutoBaseNames() {
+        List<String> autos = new ArrayList<>();
+        Path autosDir = Filesystem.getDeployDirectory().toPath().resolve("pathplanner").resolve("autos");
+        if (Files.exists(autosDir) && Files.isDirectory(autosDir)) {
+            try (DirectoryStream<Path> stream = Files.newDirectoryStream(autosDir, "*.auto")) {
+                for (Path p : stream) {
+                    String fileName = p.getFileName().toString();
+                    String base = fileName.substring(0, fileName.length() - ".auto".length());
+                    autos.add(base);
+                }
+            } catch (Exception ex) {
+                DriverStation.reportError("Auto read failed: " + ex, ex.getStackTrace());
+            }
+        }
+        return autos;
+    }
+
+    private void rebuildAutoChooser() {
+        // Autodiscover: usar el deploy dir real de WPILib (en roboRIO = /home/lvuser/deploy)
+        // para evitar bugs por paths relativos o por comportamiento de java.io.File.
+    m_autoChooser = new SendableChooser<>();
+    m_autoOptions.clear();
+
+        List<String> autos = readAutoBaseNames();
+
+        Collections.sort(autos);
+
+        if (autos.size() == 1) {
+            // Si solo hay un auto, hacerlo default para evitar que se quede en DoNothing.
+            Command cmd = AutoBuilder.buildAuto(autos.get(0));
+            m_autoChooser.setDefaultOption(autos.get(0), cmd);
+            m_autoOptions.put(autos.get(0), cmd);
+        } else {
+            Command cmd = new InstantCommand();
+            m_autoChooser.setDefaultOption("DoNothing", cmd);
+            m_autoOptions.put("DoNothing", cmd);
+        }
+        for (String base : autos) {
+            try {
+                if (autos.size() != 1 || !base.equals(autos.get(0))) {
+                    Command cmd;
+                    if ("30Derecha".equals(base)) {
+                        cmd = build30DerechaFallback();
+                        if (!m_autoConfigured) {
+                            DriverStation.reportWarning("AutoBuilder not configured; using open-loop fallback for 30Derecha", false);
+                        }
+                    } else {
+                        cmd = AutoBuilder.buildAuto(base);
+                    }
+                    m_autoChooser.addOption(base, cmd);
+                    m_autoOptions.put(base, cmd);
+                }
+            } catch (Exception ex) {
+                DriverStation.reportError("Auto build failed for " + base + ": " + ex, ex.getStackTrace());
+                if ("30Derecha".equals(base)) {
+                    Command fallback = build30DerechaFallback();
+                    m_autoChooser.addOption(base, fallback);
+                    m_autoOptions.put(base, fallback);
+                    DriverStation.reportWarning("Using fallback auto for 30Derecha", false);
+                }
+            }
+        }
+
+        SmartDashboard.putData("Auto/Chooser", m_autoChooser);
+    }
+
     private void configurePathPlanner() {
-        SmartDashboard.putString("Auto/Status", "configuring");
         try {
             // =========================
             // PathPlanner NamedCommands (event markers)
@@ -234,7 +304,7 @@ public class RobotContainer {
                                 setAssistedShooterPercent(cmdPercent);
                                 SmartDashboard.putString("AssistShooter/Auto/Mode", "ASSIST_CANT_SHOOT_FALLBACK");
                             }
-                        }, m_asistedShooter, m_shooter).withTimeout(6.0),
+                        }, m_asistedShooter).withTimeout(6.0),
                         // Esperar 1s y luego prender bandas por 5s
                         Commands.sequence(
                             Commands.waitSeconds(1.0),
@@ -297,71 +367,54 @@ public class RobotContainer {
                     && DriverStation.getAlliance().get() == DriverStation.Alliance.Red,
                 m_robotDrive
             );
-
-            // Autodiscover: usar el deploy dir real de WPILib (en roboRIO = /home/lvuser/deploy)
-            // para evitar bugs por paths relativos o por comportamiento de java.io.File.
-            Path autosDir = Filesystem.getDeployDirectory().toPath().resolve("pathplanner").resolve("autos");
-            SmartDashboard.putString("Auto/AutoDir", autosDir.toString());
-
-            // Re-crear el chooser para evitar autos viejos en Shuffleboard.
-            m_autoChooser = new SendableChooser<>();
-            SmartDashboard.putData("Auto/Chooser", m_autoChooser);
-            m_autoChooser.setDefaultOption("DoNothing", new InstantCommand());
-            List<String> autos = new ArrayList<>();
-
-            if (Files.exists(autosDir) && Files.isDirectory(autosDir)) {
-                try (DirectoryStream<Path> stream = Files.newDirectoryStream(autosDir, "*.auto")) {
-                    for (Path p : stream) {
-                        String fileName = p.getFileName().toString();
-                        String base = fileName.substring(0, fileName.length() - ".auto".length());
-                        autos.add(base);
-                    }
-                }
-            }
-
-            Collections.sort(autos);
-            int added = 0;
-            StringBuilder found = new StringBuilder();
-            for (String base : autos) {
-                try {
-                    m_autoChooser.addOption(base, AutoBuilder.buildAuto(base));
-                    added++;
-                    if (found.length() > 0) found.append(", ");
-                    found.append(base);
-                } catch (Exception ex) {
-                    SmartDashboard.putString("Auto/BuildError/" + base, ex.toString());
-                }
-            }
-
-            SmartDashboard.putNumber("Auto/AutoCount", added);
-            SmartDashboard.putString("Auto/AutosFound", found.toString());
-            SmartDashboard.putString("Auto/Status", "ok");
-
-            // Extra: si no se encontró ninguno, deja un mensaje bien claro.
-            if (added == 0) {
-                SmartDashboard.putString("Auto/Status", "no .auto found in deploy/pathplanner/autos");
-            }
+            m_autoConfigured = true;
+            SmartDashboard.putBoolean("Auto/Configured", true);
+            rebuildAutoChooser();
         } catch (Exception e) {
-            // Si falta RobotConfig/GUI settings, dejamos el chooser mínimo para no romper.
-            m_autoChooser.setDefaultOption("DoNothing", new InstantCommand());
-            SmartDashboard.putString("Auto/PathPlannerError", String.valueOf(e));
-            SmartDashboard.putString("Auto/PathPlannerErrorType", e.getClass().getName());
-            SmartDashboard.putString("Auto/PathPlannerErrorMsg", String.valueOf(e.getMessage()));
-            SmartDashboard.putString("Auto/PathPlannerErrorTop", getTopStackTrace(e, 6));
             DriverStation.reportError("PathPlanner configure failed: " + e, e.getStackTrace());
-            SmartDashboard.putString("Auto/Status", "error");
+            m_autoConfigured = false;
+            SmartDashboard.putBoolean("Auto/Configured", false);
+            SmartDashboard.putString("Auto/ConfigureError", String.valueOf(e));
+            SmartDashboard.putString("Auto/ConfigureErrorType", e.getClass().getName());
 
             // FALLBACK: aunque el config falle, al menos listar autos por nombre.
             tryPopulateChooserNamesOnly(String.valueOf(e));
         }
     }
 
+    private Command build30DerechaFallback() {
+        if (!m_autoConfigured) {
+            return buildOpenLoopAuto();
+        }
+
+        try {
+            PathPlannerPath path1 = PathPlannerPath.fromPathFile("1Path1");
+            PathPlannerPath path2 = PathPlannerPath.fromPathFile("1Path2");
+            return Commands.sequence(
+                AutoBuilder.followPath(path1),
+                AutoBuilder.followPath(path2)
+            );
+        } catch (Exception ex) {
+            DriverStation.reportError("Fallback auto load failed: " + ex, ex.getStackTrace());
+            return buildOpenLoopAuto();
+        }
+    }
+
+    private Command buildOpenLoopAuto() {
+        return Commands.sequence(
+            Commands.run(
+                    () -> m_robotDrive.drive(0.4, 0.0, 0.0, true),
+                    m_robotDrive)
+                .withTimeout(1.5),
+            new InstantCommand(() -> m_robotDrive.drive(0.0, 0.0, 0.0, true), m_robotDrive)
+        );
+    }
+
     private void validatePPSettingsJson() {
         try {
             Path settingsPath = Filesystem.getDeployDirectory().toPath().resolve("pathplanner").resolve("settings.json");
-            SmartDashboard.putString("Auto/SettingsPath", settingsPath.toString());
             if (!Files.exists(settingsPath)) {
-                SmartDashboard.putString("Auto/SettingsValidation", "MISSING settings.json");
+                DriverStation.reportWarning("PathPlanner settings.json missing", false);
                 return;
             }
 
@@ -408,23 +461,22 @@ public class RobotContainer {
                 }
             }
 
-            if (missing.length() == 0) {
-                SmartDashboard.putString("Auto/SettingsValidation", "OK");
-            } else {
-                SmartDashboard.putString("Auto/SettingsValidation", "Missing keys: " + missing);
+            if (missing.length() > 0) {
+                DriverStation.reportWarning("PathPlanner settings.json missing keys: " + missing, false);
             }
-
-            // Dump mínimo (para comprobar que está leyendo el archivo correcto)
-            SmartDashboard.putString("Auto/SettingsDriveMotorType", String.valueOf(json.get("driveMotorType")));
         } catch (Exception ex) {
-            SmartDashboard.putString("Auto/SettingsValidation", "ERROR parsing settings.json: " + ex);
+            DriverStation.reportWarning("PathPlanner settings.json parse error: " + ex, false);
         }
     }
 
     private void tryPopulateChooserNamesOnly(String error) {
         try {
             Path autosDir = Filesystem.getDeployDirectory().toPath().resolve("pathplanner").resolve("autos");
-            SmartDashboard.putString("Auto/FallbackAutoDir", autosDir.toString());
+            m_autoOptions.clear();
+
+            Command doNothing = new InstantCommand();
+            m_autoChooser.setDefaultOption("DoNothing", doNothing);
+            m_autoOptions.put("DoNothing", doNothing);
 
             List<String> autos = new ArrayList<>();
             if (Files.exists(autosDir) && Files.isDirectory(autosDir)) {
@@ -438,51 +490,19 @@ public class RobotContainer {
             }
             Collections.sort(autos);
 
-            int added = 0;
             for (String base : autos) {
                 // Comando placeholder: para que el chooser muestre opciones aunque la config esté mal.
-                m_autoChooser.addOption(
-                    base,
-                    new InstantCommand(() -> DriverStation.reportError(
-                        "Auto '" + base + "' selected but PathPlanner is not configured. Error: " + error,
-                        false))
-                );
-                added++;
+                Command placeholder = new InstantCommand(() -> DriverStation.reportError(
+                    "Auto '" + base + "' selected but PathPlanner is not configured. Error: " + error,
+                    false));
+                m_autoChooser.addOption(base, placeholder);
+                m_autoOptions.put(base, placeholder);
             }
 
-            SmartDashboard.putNumber("Auto/FallbackAutoCount", added);
-            if (added > 0) {
-                SmartDashboard.putString("Auto/Status", "error (fallback chooser names only)");
-            }
+            SmartDashboard.putData("Auto/Chooser", m_autoChooser);
+
         } catch (Exception ex) {
-            SmartDashboard.putString("Auto/FallbackError", String.valueOf(ex));
-        }
-    }
-
-    private static String getTopStackTrace(Throwable t, int maxFrames) {
-        if (t == null) return "";
-        StackTraceElement[] st = t.getStackTrace();
-        if (st == null || st.length == 0) return "";
-        int n = Math.min(maxFrames, st.length);
-        StringBuilder sb = new StringBuilder();
-        for (int i = 0; i < n; i++) {
-            if (i > 0) sb.append(" \n");
-            sb.append(st[i].toString());
-        }
-        return sb.toString();
-    }
-
-    private void configureBindings() {
-        ControlScheme scheme = m_controlSchemeChooser.getSelected();
-        if (scheme == null) {
-            scheme = ControlScheme.TWO_CONTROLLERS;
-        }
-        SmartDashboard.putString("Controls/Selected", scheme == ControlScheme.ONE_CONTROLLER ? "1 control" : "2 controles");
-
-        if (scheme == ControlScheme.ONE_CONTROLLER) {
-            configureBindingsOneController();
-        } else {
-            configureBindingsTwoControllers();
+            DriverStation.reportError("Auto fallback chooser failed: " + ex, ex.getStackTrace());
         }
     }
 
@@ -503,17 +523,21 @@ public class RobotContainer {
 
         // LT del Driver: LIBRE (shooter ahora es solo del operador)
 
-        // B (while held): Banda + AuxMotor para Control 0
-        m_driverController.b().whileTrue(
-            new RunCommand(() -> {
-                m_shooter.startBelt();
-                m_auxMotor.startReverseAux();
-            }, m_shooter, m_auxMotor)
-        ).onFalse(
+        // B (toggle): ciclo angular 5 rotaciones atras y 5 adelante, vuelve a HOME al apagar
+        m_driverController.b().onTrue(
             new InstantCommand(() -> {
-                m_shooter.stopBelt();
-                m_auxMotor.stop();
-            }, m_shooter, m_auxMotor)
+                m_angularOscillateActive = !m_angularOscillateActive;
+                if (m_angularOscillateActive) {
+                    double current = m_angular.getPositionDeg();
+                    m_angularOscillateHomeDeg = current;
+                    m_angularOscillateBackDeg = current - kAngularOscillateDeltaDeg;
+                    m_angularOscillateForward = false;
+                    CommandScheduler.getInstance().schedule(m_angularOscillateCommand);
+                } else {
+                    CommandScheduler.getInstance().cancel(m_angularOscillateCommand);
+                    m_angular.irAPosicion(kAngularHomeDeg);
+                }
+            }, m_angular)
         );
 
         // =========================
@@ -603,6 +627,9 @@ public class RobotContainer {
             getAutoAimToggleCommand()
         );
 
+        // Driver POVRight (while held): alinear al apriltag más cercano a 1m
+        m_driverController.povRight().onTrue(m_alignCommand);
+
         // Shooter Assisted (RT) en el operador
         m_operatorController.rightTrigger().whileTrue(
             getAssistedShooterCommandLoop()
@@ -688,134 +715,6 @@ public class RobotContainer {
         // Nota: el toggle de AutoAim se movió al driver (POVLeft).
     }
 
-    private void configureBindingsOneController() {
-        // =========================
-        // 1 Control (Driver) - TODO en el driver
-        // =========================
-
-        // RB: freno en seco (setX)
-        m_driverController.rightBumper().whileTrue(
-            new RunCommand(() -> m_robotDrive.setX(), m_robotDrive)
-        );
-
-        // POVLeft: Toggle AutoAim
-        m_driverController.povLeft().onTrue(
-            getAutoAimToggleCommand()
-        );
-
-        // RT: Shooter
-        m_driverController.rightTrigger().whileTrue(
-            getAssistedShooterCommandLoop()
-        ).onFalse(
-            getAssistedShooterReleaseCommand()
-        );
-
-        // LT: Intake toggle (nota: en este robot los nombres forward/reverse están invertidos respecto a física;
-        // mantenemos lo que ya funcionaba: LT en operador llamaba intakeReverse())
-        m_driverController.leftTrigger().onTrue(
-            new InstantCommand(() -> {
-                if (m_intake100ToggleActive) {
-                    return;
-                }
-                m_intakeToggleActive = !m_intakeToggleActive;
-                if (m_intakeToggleActive) {
-                    m_intake.intakeReverse();
-                } else {
-                    m_intake.stop();
-                }
-            }, m_intake)
-        );
-
-        // LB: Intake para atrás
-        m_driverController.leftBumper().whileTrue(
-            new RunCommand(() -> m_intake.intakeForward(), m_intake)
-        ).onFalse(
-            new InstantCommand(() -> m_intake.stop(), m_intake)
-        );
-
-        // X: bandas + auxiliar (toggle)
-        m_driverController.x().onTrue(
-            new InstantCommand(() -> {
-                m_beltAuxToggleActive = !m_beltAuxToggleActive;
-                if (m_beltAuxToggleActive) {
-                    m_shooter.startBelt();
-                    m_auxMotor.startReverseAux();
-                } else {
-                    m_shooter.stopBelt();
-                    m_auxMotor.stop();
-                }
-            }, m_shooter, m_auxMotor)
-        );
-
-        // Y: Angular home
-        m_driverController.y().onTrue(
-            new InstantCommand(() -> m_angular.irAPosicion((-360 * 3)), m_angular)
-        );
-
-        // A: Angular abajo
-        m_driverController.a().onTrue(
-            new InstantCommand(() -> m_angular.irAPosicion(-(360.0 * 31.5)), m_angular)
-        );
-
-        // B: ciclo anti-atoradas
-        m_driverController.b().onTrue(
-            new InstantCommand(() -> m_angular.setUnjamCycleEnabled(true), m_angular)
-        );
-
-        // POVRight (while held): subir Angular manual (open-loop) para calibración
-        m_driverController.povRight().whileTrue(
-            new RunCommand(() -> {
-                if (!m_angularJogActive) {
-                    m_angularJogActive = true;
-                }
-                m_angular.setOpenLoopPercent(0.30);
-            }, m_angular)
-        ).onFalse(
-            new InstantCommand(() -> {
-                m_angularJogActive = false;
-                m_angular.holdCurrentPosition();
-            }, m_angular)
-        );
-
-        // START: set 0 del Angular
-        m_driverController.start().onTrue(
-            new InstantCommand(() -> m_angular.resetEncoder(), m_angular)
-        );
-
-        // BACK: set 0 de la IMU (swerves)
-        m_driverController.back().onTrue(
-            new InstantCommand(() -> m_robotDrive.zeroHeading(), m_robotDrive)
-        );
-
-        // POVDown (tap): girar 180° (media vuelta)
-        // Implementación simple/robusta: aplicar una rotación fija por un tiempo y luego soltar.
-        // (Si quieres absoluto por heading con PID, lo hacemos después.)
-        m_driverController.povDown().onTrue(
-            Commands.sequence(
-                new InstantCommand(() -> SmartDashboard.putString("Drive/Turn180/State", "START")),
-                // Pequeño pulso de giro. Ajusta Drive/Turn180/RotCmd y Drive/Turn180/TimeS desde Shuffleboard.
-                Commands.runOnce(() -> {
-                    double rotCmd = SmartDashboard.getNumber("Drive/Turn180/RotCmd", 0.85);
-                    double timeS = SmartDashboard.getNumber("Drive/Turn180/TimeS", 0.75);
-                    rotCmd = MathUtil.clamp(rotCmd, -1.0, 1.0);
-                    timeS = MathUtil.clamp(timeS, 0.1, 2.0);
-                    SmartDashboard.putNumber("Drive/Turn180/RotCmdApplied", rotCmd);
-                    SmartDashboard.putNumber("Drive/Turn180/TimeSApplied", timeS);
-                    SmartDashboard.putNumber("Drive/Turn180/T0", Timer.getFPGATimestamp());
-                }),
-                Commands.run(() -> {
-                        double rotCmd = SmartDashboard.getNumber("Drive/Turn180/RotCmdApplied", 0.85);
-                        m_robotDrive.setRotationOverride(rotCmd);
-                        SmartDashboard.putString("Drive/Turn180/State", "TURNING");
-                    }, m_robotDrive)
-                    .withTimeout(SmartDashboard.getNumber("Drive/Turn180/TimeSApplied", 0.75)),
-                new InstantCommand(() -> {
-                    m_robotDrive.clearRotationOverride();
-                    SmartDashboard.putString("Drive/Turn180/State", "DONE");
-                }, m_robotDrive)
-            )
-        );
-    }
 
     private Command getAutoAimToggleCommand() {
         return new InstantCommand(() -> {
@@ -919,7 +818,24 @@ public class RobotContainer {
     }
 
     public Command getAutonomousCommand() {
-        return m_autoChooser.getSelected();
+        Command selected = m_autoChooser.getSelected();
+        String selectedName = "<unknown>";
+        if (selected == null) {
+            selectedName = "<null>";
+        } else {
+            for (Map.Entry<String, Command> entry : m_autoOptions.entrySet()) {
+                if (entry.getValue() == selected || entry.getValue().equals(selected)) {
+                    selectedName = entry.getKey();
+                    break;
+                }
+            }
+        }
+        SmartDashboard.putString("Auto/Selected", selectedName);
+        if (!m_autoConfigured && "30Derecha".equals(selectedName)) {
+            DriverStation.reportWarning("AutoBuilder not configured; forcing open-loop auto", false);
+            return buildOpenLoopAuto();
+        }
+        return selected;
     }
 
 }

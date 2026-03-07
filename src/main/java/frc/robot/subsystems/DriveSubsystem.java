@@ -114,6 +114,9 @@ public class DriveSubsystem extends SubsystemBase {
         SmartDashboard.putNumber("Drive/PoseX", pose.getX());
         SmartDashboard.putNumber("Drive/PoseY", pose.getY());
         SmartDashboard.putNumber("Drive/PoseDeg", pose.getRotation().getDegrees());
+        SmartDashboard.putNumber("Auto/Drive/Vx", m_lastChassisSpeeds.vxMetersPerSecond);
+        SmartDashboard.putNumber("Auto/Drive/Vy", m_lastChassisSpeeds.vyMetersPerSecond);
+        SmartDashboard.putNumber("Auto/Drive/Omega", m_lastChassisSpeeds.omegaRadiansPerSecond);
     }
 
     public synchronized void setAutoAimEnabled(boolean enabled) {
@@ -447,6 +450,9 @@ public class DriveSubsystem extends SubsystemBase {
      */
     public void driveRobotRelative(ChassisSpeeds speeds) {
         m_lastChassisSpeeds = speeds;
+        SmartDashboard.putNumber("Auto/Drive/Vx", speeds.vxMetersPerSecond);
+        SmartDashboard.putNumber("Auto/Drive/Vy", speeds.vyMetersPerSecond);
+        SmartDashboard.putNumber("Auto/Drive/Omega", speeds.omegaRadiansPerSecond);
         var swerveModuleStates = DriveConstants.kDriveKinematics.toSwerveModuleStates(speeds);
         setModuleStates(swerveModuleStates);
     }

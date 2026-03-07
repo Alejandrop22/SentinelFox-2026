@@ -33,7 +33,7 @@ public class AsistedShooter extends SubsystemBase {
 	private boolean m_multiplierDashboardInitialized = false;
 
 	//multiplier del SHOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOTER
-	private double m_percentMultiplier = 1.05;
+	private double m_percentMultiplier = 1.0;
 
 	private void ensureMultiplierRead() {
 		if (!m_multiplierDashboardInitialized) {
@@ -159,6 +159,7 @@ public class AsistedShooter extends SubsystemBase {
 		}
 		SmartDashboard.putNumber("AssistShooter/TargetRPMRaw", targetRpmRaw);
 		SmartDashboard.putNumber("AssistShooter/TargetPercentRaw", targetPercentRaw);
+		SmartDashboard.putNumber("AssistShooter/PercentCmd", m_lastPercentCmd);
 	}
 
 }

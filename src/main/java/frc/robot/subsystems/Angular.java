@@ -111,6 +111,10 @@ public class Angular extends SubsystemBase {
     m_targetPosition = 0;
   }
 
+  public double getPositionDeg() {
+    return m_encoder.getPosition();
+  }
+
   /**
    * Manejo directo del motor (sin PID). Útil para calibración/manual.
    * También apaga el ciclo anti-atoradas para que no "pelee".
