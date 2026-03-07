@@ -5,12 +5,6 @@
     "data": {
       "commands": [
         {
-          "type": "path",
-          "data": {
-            "pathName": "PrimerPath"
-          }
-        },
-        {
           "type": "named",
           "data": {
             "name": "IntakeOn"
@@ -19,13 +13,7 @@
         {
           "type": "path",
           "data": {
-            "pathName": "SegundoPath"
-          }
-        },
-        {
-          "type": "path",
-          "data": {
-            "pathName": "TercerPath"
+            "pathName": "1Path1"
           }
         },
         {
@@ -41,15 +29,15 @@
           }
         },
         {
-          "type": "named",
+          "type": "path",
           "data": {
-            "name": "IntakeOff"
+            "pathName": "1Path2"
           }
         },
         {
-          "type": "path",
+          "type": "named",
           "data": {
-            "pathName": "CuartoPath"
+            "name": "IntakeOff"
           }
         }
       ]

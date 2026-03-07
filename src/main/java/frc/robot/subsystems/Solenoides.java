@@ -13,7 +13,7 @@ public class Solenoides extends SubsystemBase {
     private boolean m_extended = false;
 
     public Solenoides() {
-        this(60, 0, 1, 2, 3);
+        this(60, 14, 15, 13, 12);
     }
 
     public Solenoides(int canIdHub, int aExtendChannel, int bExtendChannel, int aRetractChannel, int bRetractChannel) {
