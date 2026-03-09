@@ -12,6 +12,7 @@ import com.revrobotics.spark.config.SparkMaxConfig;
 import com.revrobotics.spark.config.SparkBaseConfig.IdleMode;
 import edu.wpi.first.wpilibj.Timer;
 import edu.wpi.first.math.MathUtil;
+import edu.wpi.first.wpilibj.DriverStation;
 
 public class Shooter extends SubsystemBase {
 	private final SparkMax m_shooterMotor51 = new SparkMax(51, MotorType.kBrushless);
@@ -28,10 +29,39 @@ public class Shooter extends SubsystemBase {
 	// Slew/ramp: evita cambios de putazo (reduce pico de corriente -> menos caída de batería)
 	private static final String kRampTimeKey = "Shooter/Ramp/TimeS";
 	private boolean m_rampDashboardInitialized = false;
-	private double m_rampTimeS = 0.50; // lo que pediste
+	private double m_rampTimeS = 0.90; // rampa más lenta para reducir pico de pila
 	private double m_lastRampUpdateS = Timer.getFPGATimestamp();
 	private double m_lastRequestedPercentRaw = 0.0;
 	private double m_rampedPercent = 0.0;
+
+	// Soft-start: limita el % durante un arranque para evitar picos de pila.
+	private static final double kSoftStartTimeS = 0.20;
+	private static final double kSoftStartMaxPercent = 0.70;
+	private double m_softStartUntilS = 0.0;
+	private boolean m_lastRequestWasZero = true;
+	private double m_lastNonIdleRequestS = 0.0;
+	private static final double kIdleReturnDelayS = 0.15;
+
+	// Max RPM usado para calcular setpoint (no PID)
+	private static final String kMaxRpmKey = "Shooter/MaxRpm";
+	private boolean m_maxRpmDashboardInitialized = false;
+	private double m_velMaxRpm = 6000.0; // tunable max RPM
+	private double m_velocitySetpointRpm = 0.0;
+
+	// Kicker: pequeño boost temporal cuando caen RPM (solo en open-loop)
+	private static final String kKickerEnableKey = "Shooter/Kicker/Enable";
+	private static final String kKickerBoostKey = "Shooter/Kicker/Boost";
+	private static final String kKickerDurationKey = "Shooter/Kicker/DurationS";
+	private static final String kKickerDropRpmKey = "Shooter/Kicker/DropRpm";
+	private static final String kKickerMinTargetRpmKey = "Shooter/Kicker/MinTargetRpm";
+	private boolean m_kickerDashboardInitialized = false;
+	private boolean m_kickerEnabled = true;
+	private double m_kickerBoostPercent = 0.30;
+	private double m_kickerDurationS = 0.45;
+	private double m_kickerDropRpm = 50.0;
+	private double m_kickerMinTargetRpm = 800.0;
+	private double m_kickerUntilS = 0.0;
+	private boolean m_kickerActive = false;
 
 	private boolean m_emergencyEnabled = false;
 	private static final double kEmergencyPercent = -0.5;
@@ -42,17 +72,19 @@ public class Shooter extends SubsystemBase {
 	// (El ramp sigue activo para subir/bajar suave.)
 	private double m_targetPercent = 0.0;
 	private String m_lastShooterCommand = "none";
-	// Idle removido: dejamos un flag fijo solo para telemetría/compat
-	@SuppressWarnings("unused")
-	private boolean m_idleSpinEnabled = false;
+	// Idle spin habilitado para mantener -0.15 cuando no hay comando
+	private boolean m_idleSpinEnabled = true;
 	@SuppressWarnings("unused")
 	private double m_lastIdleAppliedPercent = 0.0;
 	private String m_requestSource = "none";
+	private boolean m_idleRequestActive = false;
+	private static final double kIdlePercent = -0.15;
 
-	// Control por voltaje: percent (-1..1) se convierte a volts = 12*percent.
-	// Esto ayuda a que el shooter sea menos sensible a la pila (vs .set(percent) puro).
+	// Control por porcentaje con compensación por bus voltage.
+	// Ajustamos el % real según la pila para mantener la misma respuesta.
 	private static final double kNominalVoltage = 12.0;
 	private double m_commandedVolts = 0.0;
+	private double m_compensatedPercent = 0.0;
 
 	// Campos legacy (idle/kick) ya no se usan, pero los dejamos por estabilidad del archivo.
 	@SuppressWarnings("unused")
@@ -66,7 +98,7 @@ public class Shooter extends SubsystemBase {
 
 	public Shooter() {
 		m_shooterConfig.smartCurrentLimit(60);
-		m_shooterConfig.voltageCompensation(kNominalVoltage);
+		// Sin compensación interna por voltaje: usamos % + compensación manual.
 		m_shooterConfig.idleMode(IdleMode.kCoast);
 		m_shooterMotor51.configure(m_shooterConfig, ResetMode.kResetSafeParameters, PersistMode.kPersistParameters);
 
@@ -81,9 +113,10 @@ public class Shooter extends SubsystemBase {
 		m_targetPercent = 0.0;
 		m_rampedPercent = 0.0;
 		m_commandedVolts = 0.0;
+		m_compensatedPercent = 0.0;
 		m_requestSource = "hardStop";
 		m_lastShooterCommand = "HARD_STOP: " + reason;
-		m_shooterMotor51.setVoltage(0.0);
+		m_shooterMotor51.set(0.0);
 	}
 
 	private double applyRamp(double requestedPercent) {
@@ -114,34 +147,75 @@ public class Shooter extends SubsystemBase {
 			applyHardStop("blocked setShooterPercentInternal(" + requestedPercent + ")");
 			return;
 		}
+
+		boolean requestIsZero = Math.abs(requestedPercent) < 1e-6;
+		if (!m_idleRequestActive) {
+			if (!requestIsZero && m_lastRequestWasZero) {
+				m_softStartUntilS = Timer.getFPGATimestamp() + kSoftStartTimeS;
+			}
+			m_lastRequestWasZero = requestIsZero;
+			if (!requestIsZero) {
+				m_lastNonIdleRequestS = Timer.getFPGATimestamp();
+			}
+		}
+
+		double effectiveRequestedPercent = requestedPercent;
+		if (!m_idleRequestActive && Timer.getFPGATimestamp() < m_softStartUntilS) {
+			effectiveRequestedPercent = Math.copySign(
+				Math.min(Math.abs(requestedPercent), kSoftStartMaxPercent),
+				requestedPercent);
+		}
 		// Ramp (subida y bajada). Esto reemplaza el "kick" como método principal anti-pico.
 		// (Dejamos variables de kick por compatibilidad, pero ya no se usan aquí.)
-		double rampedPercent = applyRamp(requestedPercent);
+		double rampedPercent = applyRamp(effectiveRequestedPercent);
 		boolean requestIsOn = Math.abs(rampedPercent) > 1e-6;
 		m_lastRequestedPercent = rampedPercent;
 
-		double targetVolts;
 		if (m_emergencyEnabled) {
 			m_lastShooterCommand = "percent_blocked_by_emergency";
 			m_targetPercent = kEmergencyPercent;
-			targetVolts = kNominalVoltage * kEmergencyPercent;
-			m_commandedVolts = targetVolts;
-			m_shooterMotor51.setVoltage(targetVolts);
+			m_velocitySetpointRpm = kEmergencyPercent * m_velMaxRpm;
+			m_compensatedPercent = kEmergencyPercent;
+			m_shooterMotor51.set(m_compensatedPercent);
 			return;
 		}
 
 		double appliedPercent = rampedPercent;
 		m_targetPercent = requestedPercent; // target = lo que pidió arriba; applied = lo que realmente sale (ramped)
-		targetVolts = kNominalVoltage * appliedPercent;
-		m_commandedVolts = targetVolts;
-		m_requestSource = m_assistedActive ? "assisted" : (requestIsOn ? "manual" : "stop");
+		m_velocitySetpointRpm = Math.copySign(
+			MathUtil.clamp(Math.abs(appliedPercent), 0.0, 1.0) * m_velMaxRpm,
+			appliedPercent);
+		double busVoltage = Math.max(6.0, m_shooterMotor51.getBusVoltage());
+		m_compensatedPercent = MathUtil.clamp(appliedPercent * (kNominalVoltage / busVoltage), -1.0, 1.0);
+		m_commandedVolts = busVoltage * m_shooterMotor51.getAppliedOutput();
+		m_requestSource = m_idleRequestActive
+			? "idle"
+			: (m_assistedActive ? "assisted" : (requestIsOn ? "manual" : "stop"));
 		m_lastShooterCommand = String.format(
-			"voltageCmd(%.2fV) target(%.3f) appliedRamped(%.3f) rampTimeS(%.2f)",
-			targetVolts,
+			"percentCmd(%.3f) target(%.3f) appliedRamped(%.3f) rampTimeS(%.2f)",
+			m_compensatedPercent,
 			requestedPercent,
 			appliedPercent,
 			m_rampTimeS);
-		m_shooterMotor51.setVoltage(targetVolts);
+		double now = Timer.getFPGATimestamp();
+		double appliedPercentOpenLoop = m_compensatedPercent;
+		double setpointAbs = Math.abs(m_velocitySetpointRpm);
+		double actualAbs = Math.abs(m_shooterEncoder.getVelocity());
+		if (m_kickerEnabled
+				&& !m_idleRequestActive
+				&& setpointAbs >= m_kickerMinTargetRpm
+				&& (setpointAbs - actualAbs) >= m_kickerDropRpm) {
+			m_kickerUntilS = now + m_kickerDurationS;
+		}
+		m_kickerActive = now < m_kickerUntilS;
+		if (m_kickerActive) {
+			appliedPercentOpenLoop = MathUtil.clamp(
+				appliedPercentOpenLoop + Math.copySign(m_kickerBoostPercent, appliedPercentOpenLoop),
+				-1.0,
+				1.0);
+		}
+		m_compensatedPercent = appliedPercentOpenLoop;
+		m_shooterMotor51.set(m_compensatedPercent);
 	}
 
 	/**
@@ -192,11 +266,16 @@ public class Shooter extends SubsystemBase {
 	 * (con rampa) en vez de quedarse en el ultimo setpoint alto.
 	 */
 	public void endShootAndReturnToIdle() {
-		// Compat: ahora que quitamos idle, esta función significa "terminar disparo y apagar".
-		// Se apaga con RAMPA (no es stop() en seco).
+		// Volver a idle (con rampa) si está habilitado.
 		m_assistedActive = false;
-		m_requestSource = "return_to_stop";
-		setShooterPercentInternal(0.0);
+		m_requestSource = "return_to_idle";
+		if (m_idleSpinEnabled) {
+			m_idleRequestActive = true;
+			setShooterPercentInternal(kIdlePercent);
+			m_idleRequestActive = false;
+		} else {
+			setShooterPercentInternal(0.0);
+		}
 	}
 
 	/**
@@ -206,8 +285,7 @@ public class Shooter extends SubsystemBase {
 	 * esté ENABLED y no haya un comando activo que lo sobre-escriba.
 	 */
 	public void setIdleSpinEnabled(boolean enabled) {
-		// Idle deshabilitado por decisión de manejo: ignorar.
-		m_idleSpinEnabled = false;
+		m_idleSpinEnabled = enabled;
 	}
 
 	public void stop() {
@@ -216,11 +294,12 @@ public class Shooter extends SubsystemBase {
 		m_requestSource = "stop";
 		m_targetPercent = 0.0;
 		m_commandedVolts = 0.0;
+		m_velocitySetpointRpm = 0.0;
 		m_startupKickRemaining = 0;
 		m_lastRequestedPercent = 0.0;
 		m_lastRequestedPercentRaw = 0.0;
 		m_rampedPercent = 0.0;
-		m_shooterMotor51.setVoltage(0.0);
+		m_shooterMotor51.set(0.0);
 	}
 
 	/**
@@ -240,9 +319,10 @@ public class Shooter extends SubsystemBase {
 		m_emergencyEnabled = !m_emergencyEnabled;
 		m_targetPercent = 0.0;
 		m_commandedVolts = 0.0;
+		m_velocitySetpointRpm = 0.0;
 		m_startupKickRemaining = 0;
 		m_lastRequestedPercent = 0.0;
-		m_shooterMotor51.setVoltage(m_emergencyEnabled ? (kNominalVoltage * kEmergencyPercent) : 0.0);
+		m_shooterMotor51.set(m_emergencyEnabled ? kEmergencyPercent : 0.0);
 	}
 
 	public boolean isEmergencyEnabled() {
@@ -255,10 +335,11 @@ public class Shooter extends SubsystemBase {
 		m_requestSource = "stop";
 		m_targetPercent = 0.0;
 		m_commandedVolts = 0.0;
+		m_velocitySetpointRpm = 0.0;
 		m_startupKickRemaining = 0;
 		m_lastRequestedPercent = 0.0;
 		// El usuario pidió que al desactivar emergencia se apague el motor.
-		m_shooterMotor51.setVoltage(0.0);
+		m_shooterMotor51.set(0.0);
 	}
 
 	public double getTargetPercent() {
@@ -291,6 +372,25 @@ public class Shooter extends SubsystemBase {
 		m_rampTimeS = SmartDashboard.getNumber(kRampTimeKey, m_rampTimeS);
 		m_rampTimeS = MathUtil.clamp(m_rampTimeS, 0.05, 2.0);
 
+		if (!m_maxRpmDashboardInitialized) {
+			SmartDashboard.putNumber(kMaxRpmKey, m_velMaxRpm);
+			m_maxRpmDashboardInitialized = true;
+		}
+		if (!m_kickerDashboardInitialized) {
+			SmartDashboard.putBoolean(kKickerEnableKey, m_kickerEnabled);
+			SmartDashboard.putNumber(kKickerBoostKey, m_kickerBoostPercent);
+			SmartDashboard.putNumber(kKickerDurationKey, m_kickerDurationS);
+			SmartDashboard.putNumber(kKickerDropRpmKey, m_kickerDropRpm);
+			SmartDashboard.putNumber(kKickerMinTargetRpmKey, m_kickerMinTargetRpm);
+			m_kickerDashboardInitialized = true;
+		}
+		m_velMaxRpm = SmartDashboard.getNumber(kMaxRpmKey, m_velMaxRpm);
+		m_kickerEnabled = SmartDashboard.getBoolean(kKickerEnableKey, m_kickerEnabled);
+		m_kickerBoostPercent = SmartDashboard.getNumber(kKickerBoostKey, m_kickerBoostPercent);
+		m_kickerDurationS = SmartDashboard.getNumber(kKickerDurationKey, m_kickerDurationS);
+		m_kickerDropRpm = SmartDashboard.getNumber(kKickerDropRpmKey, m_kickerDropRpm);
+		m_kickerMinTargetRpm = SmartDashboard.getNumber(kKickerMinTargetRpmKey, m_kickerMinTargetRpm);
+
 		// Hard stop desde Shuffleboard:
 		//  - publicar default una sola vez
 		//  - luego sólo leer
@@ -313,29 +413,51 @@ public class Shooter extends SubsystemBase {
 			setShooterPercentInternal(0.0);
 		}
 
-		// Idle Spin eliminado: aquí NO comandamos el motor automáticamente.
-		m_lastIdleAppliedPercent = 0.0;
+		// Idle spin: mantener -0.15 cuando no hay comando activo (con pequeño delay)
+		double now = Timer.getFPGATimestamp();
+		if (!m_hardStop
+				&& !m_emergencyEnabled
+				&& !m_assistedActive
+				&& m_idleSpinEnabled
+				&& DriverStation.isEnabled()
+				&& (now - m_lastNonIdleRequestS) >= kIdleReturnDelayS) {
+			m_idleRequestActive = true;
+			setShooterPercentInternal(kIdlePercent);
+			m_idleRequestActive = false;
+			m_lastIdleAppliedPercent = kIdlePercent;
+		} else {
+			m_lastIdleAppliedPercent = 0.0;
+		}
 
-		// En modo voltaje NO necesitamos periodic para controlar, sólo para telemetría.
+		// En modo % con compensación no necesitamos periodic para controlar, sólo para telemetría.
 		SmartDashboard.putBoolean("Shooter/EmergencyEnabled", m_emergencyEnabled);
 		SmartDashboard.putBoolean("Shooter/AssistedEnabled", m_assistedActive && !m_emergencyEnabled);
-		SmartDashboard.putBoolean("Shooter/IdleSpinEnabled", false);
+		SmartDashboard.putBoolean("Shooter/IdleSpinEnabled", m_idleSpinEnabled);
 		SmartDashboard.putBoolean("Shooter/HardStopActive", m_hardStop);
 		SmartDashboard.putNumber("Shooter/Ramp/TimeS", m_rampTimeS);
 		SmartDashboard.putNumber("Shooter/RequestedPercentRaw", m_lastRequestedPercentRaw);
 		SmartDashboard.putNumber("Shooter/AppliedPercentRamped", m_rampedPercent);
-		SmartDashboard.putNumber("Shooter/IdleSpinPercent", 0.0);
-		SmartDashboard.putNumber("Shooter/IdleSpin/AppliedPercent", 0.0);
-		SmartDashboard.putNumber("Shooter/IdleSpin/AppliedVolts", 0.0);
+		SmartDashboard.putNumber("Shooter/IdleSpinPercent", kIdlePercent);
+		SmartDashboard.putNumber("Shooter/IdleSpin/AppliedPercent", m_lastIdleAppliedPercent);
+		SmartDashboard.putNumber("Shooter/IdleSpin/AppliedVolts", m_shooterMotor51.getBusVoltage() * m_lastIdleAppliedPercent);
 		SmartDashboard.putNumber("Shooter/VelocityRPM", m_shooterEncoder.getVelocity());
 		SmartDashboard.putNumber("Shooter/VelocityRPMAbs", Math.abs(m_shooterEncoder.getVelocity()));
 		SmartDashboard.putNumber("Shooter/TargetPercent", m_targetPercent);
 		SmartDashboard.putNumber("Shooter/TargetVolts", kNominalVoltage * m_targetPercent);
 		SmartDashboard.putNumber("Shooter/CommandedVolts", m_commandedVolts);
+		SmartDashboard.putNumber("Shooter/CompensatedPercent", m_compensatedPercent);
+		SmartDashboard.putNumber("Shooter/VelocitySetpointRpm", m_velocitySetpointRpm);
 		SmartDashboard.putNumber("Shooter/AppliedPercent", m_shooterMotor51.getAppliedOutput());
 		SmartDashboard.putNumber("Shooter/BusVoltage", m_shooterMotor51.getBusVoltage());
 		SmartDashboard.putNumber("Shooter/AppliedVoltsApprox", m_shooterMotor51.getBusVoltage() * m_shooterMotor51.getAppliedOutput());
 		SmartDashboard.putNumber("Shooter/OutputCurrentA", m_shooterMotor51.getOutputCurrent());
+		SmartDashboard.putNumber("Shooter/MaxRpm", m_velMaxRpm);
+		SmartDashboard.putBoolean("Shooter/Kicker/Active", m_kickerActive);
+		SmartDashboard.putBoolean("Shooter/Kicker/Enable", m_kickerEnabled);
+		SmartDashboard.putNumber("Shooter/Kicker/Boost", m_kickerBoostPercent);
+		SmartDashboard.putNumber("Shooter/Kicker/DurationS", m_kickerDurationS);
+		SmartDashboard.putNumber("Shooter/Kicker/DropRpm", m_kickerDropRpm);
+		SmartDashboard.putNumber("Shooter/Kicker/MinTargetRpm", m_kickerMinTargetRpm);
 		SmartDashboard.putString("Shooter/LastCommand", m_lastShooterCommand);
 		SmartDashboard.putString("Shooter/RequestSource", m_requestSource);
 	}

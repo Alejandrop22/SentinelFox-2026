@@ -40,7 +40,7 @@ public class Camara extends SubsystemBase {
      * camera->tag tiene un componente lateral (Y) que NO corresponde al centro del robot.
      * Compensamos eso ajustando el Y antes de calcular yaw/distancia 2D.
      */
-    private static final double kCameraMountRightOffsetM = 0.0; // +derecha (m)
+    private static final double kCameraMountRightOffsetM = 0.20; // +derecha (m)
 
     /**
      * Offset horizontal de montaje de la cámara (grados) para compensar yaw si el lente
@@ -95,11 +95,11 @@ public class Camara extends SubsystemBase {
     private static CorrectedTarget computeCorrectedTarget(PhotonTrackedTarget target, double mountRightOffsetM) {
         double x = target.getBestCameraToTarget().getX();
         // Corregir el componente lateral porque la cámara no está en el centro del robot.
-        // Convencion esperada: +mountRightOffsetM significa "camara montada a la derecha".
-        // Para obtener el vector desde el centro del robot hacia el tag,
-        // sumamos el offset (en vez de restarlo) para no invertir el yaw.
+    // Convencion esperada: +mountRightOffsetM significa "camara montada a la derecha".
+    // Photon: +Y = izquierda. Si la camara está a la derecha, el vector camera->tag
+    // queda con Y positiva; para convertir al centro, restamos el offset.
         double rawY = target.getBestCameraToTarget().getY();
-        double y = rawY + mountRightOffsetM;
+    double y = rawY - mountRightOffsetM;
         double z = target.getBestCameraToTarget().getZ();
         double distance = Math.sqrt((x * x) + (y * y) + (z * z));
         double yawDeg = Math.toDegrees(Math.atan2(y, x));

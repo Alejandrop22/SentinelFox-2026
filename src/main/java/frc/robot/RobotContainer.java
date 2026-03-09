@@ -14,6 +14,7 @@ import frc.robot.subsystems.AuxMotor;
 import frc.robot.subsystems.AsistedShooter;
 import frc.robot.subsystems.Solenoides;
 import edu.wpi.first.wpilibj2.command.InstantCommand;
+import edu.wpi.first.wpilibj.DigitalOutput;
 import edu.wpi.first.wpilibj2.command.CommandScheduler;
 import frc.robot.Constants.OIConstants;
 import edu.wpi.first.wpilibj.smartdashboard.SendableChooser;
@@ -54,6 +55,14 @@ public class RobotContainer {
     private final AuxMotor m_auxMotor = new AuxMotor();
     private final Solenoides m_solenoides = new Solenoides();
 
+    private final DigitalOutput Estado_1 = new DigitalOutput(6);
+    private final DigitalOutput Estado_2 = new DigitalOutput(7);
+    private final DigitalOutput Estado_3 = new DigitalOutput(8);
+    private final DigitalOutput Estado_4 = new DigitalOutput(9);
+
+    // Estado LED (solo uno encendido a la vez)
+    private DigitalOutput m_activeStatusDio = null;
+
     private final CommandXboxController m_driverController =
         new CommandXboxController(OIConstants.kDriverControllerPort);
     private final CommandXboxController m_operatorController = new CommandXboxController(1);
@@ -65,8 +74,6 @@ public class RobotContainer {
     private int m_rcHeartbeat = 0;
 
     private boolean m_intake100ToggleActive = false;
-    private boolean m_intakeToggleActive = false;
-    private boolean m_beltAuxToggleActive = false;
     private boolean m_angularOscillateActive = false;
     private boolean m_angularOscillateForward = true;
     private double m_angularOscillateHomeDeg = 0.0;
@@ -86,13 +93,16 @@ public class RobotContainer {
     // Angular jog (para calibración / reset 0)
     private boolean m_angularJogActive = false;
 
+    // Auto command helpers (PathPlanner): shooter toggle en auto
+    private Command m_autoShooterHoldCommand = null;
+
     // Debounce simple para AutoAim-tag: evita que un frame sin tag apague/prenda el shooter.
     private int m_autoAimTagPresentCycles = 0;
     private static final int kAutoAimTagDebounceCycles = 5; // ~100ms
 
     // Shooter fallback (equivalente al viejo "-4000 RPM").
     // Mapea a porcentaje, y el subsistema Shooter lo convertirá a VOLTAJE.
-    private static final double kShooterFallbackPercent = -1.0;
+    private static final double kShooterFallbackPercent = -0.805;
     // AutoAim solo debe activarse si hay un tag válido visible.
     private boolean canEnableAutoAimNow() {
         return m_camara.hasAutoAimTag() && m_camara.getAutoAimTagId() != 0;
@@ -109,10 +119,16 @@ public class RobotContainer {
         edu.wpi.first.wpilibj.smartdashboard.SmartDashboard.putNumber("Shooter/Assisted/PercentCmd", percent);
     }
 
+    private void logAutoEvent(String name) {
+        SmartDashboard.putString("Auto/Event", name);
+        DriverStation.reportWarning("Auto event: " + name, false);
+    }
+
     public RobotContainer() {
         configurePathPlanner();
-    configureBindingsTwoControllers();
+        configureBindingsTwoControllers();
         Align.publishDefaults();
+
 
         m_robotDrive.setDefaultCommand(
             new RunCommand(
@@ -147,6 +163,35 @@ public class RobotContainer {
      */
     public void publishRobotContainerHeartbeat() {
         SmartDashboard.putNumber("RC/Heartbeat", m_rcHeartbeat++);
+    }
+
+    /**
+     * Actualiza los DIO para LEDs de estado.
+     * Regla: solo un DIO encendido a la vez (si ninguno aplica, todos apagados).
+     * Prioridad: AutoAim > Emergency shooter > Assisted shooter > Intake 100% > Oscilación Angular.
+     */
+    public void updateStatusDios() {
+        DigitalOutput desired = null;
+
+        if (m_robotDrive.isAutoAimEnabled()) {
+            desired = Estado_1; // AutoAim = DIO 6
+        } else if (m_shooter.isEmergencyEnabled()) {
+            desired = Estado_4; // Emergency = DIO 9
+        } else if (m_shooter.isAssistedActive()) {
+            desired = Estado_2; // Assisted shooter = DIO 7
+        } else if (m_intake100ToggleActive) {
+            desired = Estado_3; // Intake 100% = DIO 8
+        } else if (m_angularOscillateActive) {
+            desired = Estado_4; // Oscilación angular = DIO 9 (solo si no hubo emergencia)
+        }
+
+        if (desired != m_activeStatusDio) {
+            Estado_1.set(desired == Estado_1);
+            Estado_2.set(desired == Estado_2);
+            Estado_3.set(desired == Estado_3);
+            Estado_4.set(desired == Estado_4);
+            m_activeStatusDio = desired;
+        }
     }
 
     private List<String> readAutoBaseNames() {
@@ -191,9 +236,11 @@ public class RobotContainer {
                 if (autos.size() != 1 || !base.equals(autos.get(0))) {
                     Command cmd;
                     if ("30Derecha".equals(base)) {
-                        cmd = build30DerechaFallback();
                         if (!m_autoConfigured) {
+                            cmd = build30DerechaFallback();
                             DriverStation.reportWarning("AutoBuilder not configured; using open-loop fallback for 30Derecha", false);
+                        } else {
+                            cmd = AutoBuilder.buildAuto(base);
                         }
                     } else {
                         cmd = AutoBuilder.buildAuto(base);
@@ -229,7 +276,10 @@ public class RobotContainer {
             NamedCommands.registerCommand(
                 "IntakeOn",
                 Commands.sequence(
-                    new InstantCommand(() -> m_angular.irAPosicion(-(360.0 * 31.5)), m_angular),
+                    new InstantCommand(() -> {
+                        logAutoEvent("IntakeOn");
+                        m_angular.irAPosicion(-(360.0 * 31.5));
+                    }, m_angular),
                     Commands.waitSeconds(0.5),
                     new InstantCommand(() -> m_intake.intakeReverse(), m_intake)
                 )
@@ -238,7 +288,126 @@ public class RobotContainer {
             // IntakeOff: solo parar intake
             NamedCommands.registerCommand(
                 "IntakeOff",
-                new InstantCommand(() -> m_intake.stop(), m_intake)
+                new InstantCommand(() -> {
+                    logAutoEvent("IntakeOff");
+                    m_intake.stop();
+                }, m_intake)
+            );
+
+            // ===== Nombres nuevos para autos (lowercase) =====
+            // angularAbajo: mismo que botón A del operador
+            NamedCommands.registerCommand(
+                "angularAbajo",
+                new InstantCommand(() -> {
+                    logAutoEvent("angularAbajo");
+                    m_angular.irAPosicion(-(360.0 * 31.5));
+                }, m_angular)
+            );
+
+            // angularArriba: mismo que botón Y del operador (home)
+            NamedCommands.registerCommand(
+                "angularArriba",
+                new InstantCommand(() -> {
+                    logAutoEvent("angularArriba");
+                    m_angular.irAPosicion((-360 * 3));
+                }, m_angular)
+            );
+
+            // intakeOn: mismo que LT del operador (mantener)
+            NamedCommands.registerCommand(
+                "intakeOn",
+                new InstantCommand(() -> {
+                    logAutoEvent("intakeOn");
+                    m_intake.intakeReverse();
+                }, m_intake)
+            );
+
+            // intakeOff: apagar intake
+            NamedCommands.registerCommand(
+                "intakeOff",
+                new InstantCommand(() -> {
+                    logAutoEvent("intakeOff");
+                    m_intake.stop();
+                }, m_intake)
+            );
+
+            // autoAimEnable: activar AutoAim (solo si hay tag válido)
+            NamedCommands.registerCommand(
+                "autoAimEnable",
+                new InstantCommand(() -> {
+                    logAutoEvent("autoAimEnable");
+                    if (!canEnableAutoAimNow()) {
+                        m_robotDrive.setAutoAimEnabled(false);
+                        SmartDashboard.putBoolean("AutoAim/EnabledRequested", false);
+                        SmartDashboard.putString("AutoAim/EnableReject", "No valid tag");
+                        return;
+                    }
+                    m_robotDrive.setAutoAimEnabled(true);
+                    SmartDashboard.putBoolean("AutoAim/EnabledRequested", true);
+                    SmartDashboard.putString("AutoAim/EnableReject", "");
+                }, m_robotDrive)
+            );
+
+            // autoAimDisable: desactivar AutoAim
+            NamedCommands.registerCommand(
+                "autoAimDisable",
+                new InstantCommand(() -> {
+                    logAutoEvent("autoAimDisable");
+                    m_robotDrive.setAutoAimEnabled(false);
+                    SmartDashboard.putBoolean("AutoAim/EnabledRequested", false);
+                    SmartDashboard.putString("AutoAim/EnableReject", "");
+                }, m_robotDrive)
+            );
+
+            // shooterOn: equivalente a dejar RT presionado (toggle)
+            NamedCommands.registerCommand(
+                "shooterOn",
+                new InstantCommand(() -> {
+                    logAutoEvent("shooterOn");
+                    if (m_autoShooterHoldCommand != null) {
+                        CommandScheduler.getInstance().cancel(m_autoShooterHoldCommand);
+                    }
+                    m_autoShooterHoldCommand = getAssistedShooterCommandLoop();
+                    CommandScheduler.getInstance().schedule(m_autoShooterHoldCommand);
+                })
+            );
+
+            // shooterOff: soltar RT (regresar a idle)
+            NamedCommands.registerCommand(
+                "shooterOff",
+                new InstantCommand(() -> {
+                    logAutoEvent("shooterOff");
+                    if (m_autoShooterHoldCommand != null) {
+                        CommandScheduler.getInstance().cancel(m_autoShooterHoldCommand);
+                    }
+                    m_autoShooterHoldCommand = null;
+                    m_asistedShooter.stop();
+                    m_shooter.clearAssistedRequest();
+                    m_shooter.setIdleSpinEnabled(true);
+                    m_shooter.endShootAndReturnToIdle();
+                    m_shooter.stopBelt();
+                    m_auxMotor.stop();
+                })
+            );
+
+            // auxOn: bandas + auxiliar (como botón X)
+            NamedCommands.registerCommand(
+                "auxOn",
+                new InstantCommand(() -> {
+                    logAutoEvent("auxOn");
+                    m_shooter.startBelt();
+                    m_auxMotor.startReverseAux();
+                })
+            );
+
+            // auxOff: apagar bandas y auxiliar
+            NamedCommands.registerCommand(
+                "auxOff",
+                new InstantCommand(() -> {
+                    logAutoEvent("auxOff");
+                    m_shooter.stopBelt();
+                    m_auxMotor.stop();
+                })
             );
 
             // ShooterOn:
@@ -250,6 +419,7 @@ public class RobotContainer {
             NamedCommands.registerCommand(
                 "ShooterOn",
                 Commands.sequence(
+                    new InstantCommand(() -> logAutoEvent("ShooterOn")),
                     getAutoAimToggleCommand().onlyIf(() -> !m_robotDrive.isAutoAimEnabled()),
                     Commands.waitSeconds(0.1),
                     Commands.parallel(
@@ -336,6 +506,7 @@ public class RobotContainer {
             NamedCommands.registerCommand(
                 "ShooterOff",
                 new InstantCommand(() -> {
+                    logAutoEvent("ShooterOff");
                     m_asistedShooter.stop();
                     m_shooter.clearAssistedRequest();
                     // Stop total del shooter
@@ -539,6 +710,8 @@ public class RobotContainer {
                 }
             }, m_angular)
         );
+
+        // A/Y del driver libres (DIO ahora son estados automáticos)
 
         // =========================
         // Control 1 (Operator) - Subsistemas

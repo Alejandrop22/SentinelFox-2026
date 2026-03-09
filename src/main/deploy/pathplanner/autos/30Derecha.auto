@@ -7,7 +7,19 @@
         {
           "type": "named",
           "data": {
-            "name": "IntakeOn"
+            "name": "autoAimDisable"
+          }
+        },
+        {
+          "type": "named",
+          "data": {
+            "name": "angularAbajo"
+          }
+        },
+        {
+          "type": "named",
+          "data": {
+            "name": "intakeOn"
           }
         },
         {
@@ -19,13 +31,49 @@
         {
           "type": "named",
           "data": {
-            "name": "ShooterOn"
+            "name": "autoAimEnable"
           }
         },
         {
           "type": "named",
           "data": {
-            "name": "ShooterOff"
+            "name": "shooterOn"
+          }
+        },
+        {
+          "type": "wait",
+          "data": {
+            "waitTime": 2.0
+          }
+        },
+        {
+          "type": "named",
+          "data": {
+            "name": "auxOn"
+          }
+        },
+        {
+          "type": "wait",
+          "data": {
+            "waitTime": 5.0
+          }
+        },
+        {
+          "type": "named",
+          "data": {
+            "name": "auxOff"
+          }
+        },
+        {
+          "type": "named",
+          "data": {
+            "name": "shooterOff"
+          }
+        },
+        {
+          "type": "named",
+          "data": {
+            "name": "autoAimDisable"
           }
         },
         {
@@ -37,7 +85,55 @@
         {
           "type": "named",
           "data": {
-            "name": "IntakeOff"
+            "name": "autoAimEnable"
+          }
+        },
+        {
+          "type": "named",
+          "data": {
+            "name": "shooterOn"
+          }
+        },
+        {
+          "type": "wait",
+          "data": {
+            "waitTime": 2.0
+          }
+        },
+        {
+          "type": "named",
+          "data": {
+            "name": "auxOn"
+          }
+        },
+        {
+          "type": "wait",
+          "data": {
+            "waitTime": 5.0
+          }
+        },
+        {
+          "type": "named",
+          "data": {
+            "name": "auxOff"
+          }
+        },
+        {
+          "type": "named",
+          "data": {
+            "name": "shooterOff"
+          }
+        },
+        {
+          "type": "named",
+          "data": {
+            "name": "autoAimDisable"
+          }
+        },
+        {
+          "type": "named",
+          "data": {
+            "name": "intakeOff"
           }
         }
       ]

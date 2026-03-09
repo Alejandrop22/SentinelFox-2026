@@ -6,11 +6,10 @@ import edu.wpi.first.wpilibj.DriverStation;
 public class Leds {
 
     //Solo jala el state 2 en adelante, el 1 es para reiniciar el wled
-    private final DigitalOutput state_1 = new DigitalOutput(0);
-    private final DigitalOutput state_2 = new DigitalOutput(1);
-    private final DigitalOutput state_3 = new DigitalOutput(2);
-    private final DigitalOutput state_4 = new DigitalOutput(3);
-    private final DigitalOutput state_5 = new DigitalOutput(4);
+    private final DigitalOutput state_1 = new DigitalOutput(6);
+    private final DigitalOutput state_2 = new DigitalOutput(7);    private final DigitalOutput state_3 = new DigitalOutput(2);
+    private final DigitalOutput state_4 = new DigitalOutput(8);
+    private final DigitalOutput state_5 = new DigitalOutput(9);
     
     private boolean isIntaking = false;
     private boolean isAuxRunning = false;

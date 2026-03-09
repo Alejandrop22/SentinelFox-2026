@@ -11,12 +11,12 @@ public class AsistedShooter extends SubsystemBase {
 	private final SlewRateLimiter m_rpmLimiter = new SlewRateLimiter(kRpmSlewRatePerSec);
 	private static final double kMaxShootDistanceMeters = 5.0;
 	private static final double kMinDistanceMeters = 0.30;
-	// Curva nueva (100%):
-	// percentMag(x) = 0.01x^2 + 0.02x + 0.45
+	// Curva nueva (porcentaje directo, ya NEGATIVO):
+	// percent(x) = 0.005x^2 - 0.1145x - 0.3474
 	// donde x está en METROS.
-	private static final double kPercentA = 0.01;
-	private static final double kPercentB = 0.02;
-	private static final double kPercentC = 0.45;
+	private static final double kPercentA = 0.005;
+	private static final double kPercentB = -0.1145;
+	private static final double kPercentC = -0.3474;
 
 	// Smoothing for percent output (units: percent per second)
 	// Mas bajo = mas estable (menos "fluctuacion" audible) pero responde mas lento.
@@ -33,7 +33,8 @@ public class AsistedShooter extends SubsystemBase {
 	private boolean m_multiplierDashboardInitialized = false;
 
 	//multiplier del SHOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOTER
-	private double m_percentMultiplier = 1.0;
+	private double m_percentMultiplier = 1.0
+	;
 
 	private void ensureMultiplierRead() {
 		if (!m_multiplierDashboardInitialized) {
@@ -122,12 +123,12 @@ public class AsistedShooter extends SubsystemBase {
 		double dist = getAutoAimDistanceMeters();
 		// Clamp distancia válida para la curva
 		double d = MathUtil.clamp(dist, kMinDistanceMeters, kMaxShootDistanceMeters);
-		// percent magnitude (positivo)
+		// percent directo (ya negativo)
 		double rawPercent = (kPercentA * d * d) + (kPercentB * d) + kPercentC;
-		rawPercent = MathUtil.clamp(rawPercent, 0.0, 1.0);
+		rawPercent = MathUtil.clamp(rawPercent, -1.0, 0.0);
 		// Aplicar suavizado (limitar cambio por segundo)
 		double smoothed = m_percentLimiter.calculate(rawPercent);
-		double percentCmdRaw = -MathUtil.clamp(smoothed, 0.0, 1.0);
+		double percentCmdRaw = MathUtil.clamp(smoothed, -1.0, 0.0);
 		SmartDashboard.putNumber("AssistShooter/DesiredPercentRaw", percentCmdRaw);
 
 		// Aplicar multiplicador
