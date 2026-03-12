@@ -12,11 +12,11 @@ public class AsistedShooter extends SubsystemBase {
 	private static final double kMaxShootDistanceMeters = 5.0;
 	private static final double kMinDistanceMeters = 0.30;
 	// Curva nueva (porcentaje directo, ya NEGATIVO):
-	// percent(x) = 0.005x^2 - 0.1145x - 0.3474
+	// percent(x) = 0.0033x^2 - 0.0802x - 0.4064
 	// donde x está en METROS.
-	private static final double kPercentA = 0.005;
-	private static final double kPercentB = -0.1145;
-	private static final double kPercentC = -0.3474;
+	private static final double kPercentA = 0.0033;
+	private static final double kPercentB = -0.0802;
+	private static final double kPercentC = -0.4064;
 
 	// Smoothing for percent output (units: percent per second)
 	// Mas bajo = mas estable (menos "fluctuacion" audible) pero responde mas lento.
@@ -33,8 +33,7 @@ public class AsistedShooter extends SubsystemBase {
 	private boolean m_multiplierDashboardInitialized = false;
 
 	//multiplier del SHOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOTER
-	private double m_percentMultiplier = 1.0
-	;
+	private double m_percentMultiplier = 1.08;
 
 	private void ensureMultiplierRead() {
 		if (!m_multiplierDashboardInitialized) {

@@ -65,7 +65,9 @@ public class Shooter extends SubsystemBase {
 
 	private boolean m_emergencyEnabled = false;
 	private static final double kEmergencyPercent = -0.5;
-	private static final double kManualShooterPercent = -1.0;
+	private static final String kManualShooterPercentKey = "Shooter/ManualPercent";
+	private boolean m_manualShooterDashboardInitialized = false;
+	private double m_manualShooterPercent = -0.60;
 	private static final double kBeltPercent = 0.5;
 	private boolean m_assistedActive = false;
 	// Idle spin deshabilitado: el shooter SOLO se mueve cuando se ordena por botones/autos.
@@ -202,6 +204,7 @@ public class Shooter extends SubsystemBase {
 		double setpointAbs = Math.abs(m_velocitySetpointRpm);
 		double actualAbs = Math.abs(m_shooterEncoder.getVelocity());
 		if (m_kickerEnabled
+				&& !"manual".equals(m_requestSource)
 				&& !m_idleRequestActive
 				&& setpointAbs >= m_kickerMinTargetRpm
 				&& (setpointAbs - actualAbs) >= m_kickerDropRpm) {
@@ -229,7 +232,7 @@ public class Shooter extends SubsystemBase {
 	public void startManualShooter() {
 		m_assistedActive = false;
 		m_requestSource = "manual";
-		setShooterPercentInternal(kManualShooterPercent);
+		setShooterPercentInternal(m_manualShooterPercent);
 	}
 
 	public void setAssistedShooterPercent(double percent) {
@@ -384,12 +387,19 @@ public class Shooter extends SubsystemBase {
 			SmartDashboard.putNumber(kKickerMinTargetRpmKey, m_kickerMinTargetRpm);
 			m_kickerDashboardInitialized = true;
 		}
+		if (!m_manualShooterDashboardInitialized) {
+			SmartDashboard.putNumber(kManualShooterPercentKey, m_manualShooterPercent);
+			m_manualShooterDashboardInitialized = true;
+		}
 		m_velMaxRpm = SmartDashboard.getNumber(kMaxRpmKey, m_velMaxRpm);
 		m_kickerEnabled = SmartDashboard.getBoolean(kKickerEnableKey, m_kickerEnabled);
 		m_kickerBoostPercent = SmartDashboard.getNumber(kKickerBoostKey, m_kickerBoostPercent);
 		m_kickerDurationS = SmartDashboard.getNumber(kKickerDurationKey, m_kickerDurationS);
 		m_kickerDropRpm = SmartDashboard.getNumber(kKickerDropRpmKey, m_kickerDropRpm);
 		m_kickerMinTargetRpm = SmartDashboard.getNumber(kKickerMinTargetRpmKey, m_kickerMinTargetRpm);
+		double manualPercentRaw = SmartDashboard.getNumber(kManualShooterPercentKey, m_manualShooterPercent);
+		manualPercentRaw = MathUtil.clamp(Math.abs(manualPercentRaw), 0.0, 1.0);
+		m_manualShooterPercent = -manualPercentRaw;
 
 		// Hard stop desde Shuffleboard:
 		//  - publicar default una sola vez

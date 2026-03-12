@@ -52,7 +52,7 @@ public class Angular extends SubsystemBase {
   //  - kSetpointToleranceDeg: define cuándo una rutina automática considera que "ya llegó" al setpoint.
   //    Si es muy grande, la rutina puede terminar antes de tiempo.
   private static final double kDownToleranceDeg = (360 * 3.0);    // ±3 rotaciones alrededor de kDownPositionDeg
-  private static final double kSetpointToleranceDeg = (360 * 5.0); // ±5 rotaciones para finalizar rutinas
+  private static final double kSetpointToleranceDeg = (360 * 7); // ±5 rotaciones para finalizar rutinas
 
   // --- Manual open-loop mode (para calibración) ---
   private boolean m_manualOpenLoop = false;

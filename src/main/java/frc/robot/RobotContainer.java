@@ -102,7 +102,8 @@ public class RobotContainer {
 
     // Shooter fallback (equivalente al viejo "-4000 RPM").
     // Mapea a porcentaje, y el subsistema Shooter lo convertirá a VOLTAJE.
-    private static final double kShooterFallbackPercent = -0.805;
+    //AQUI ES EL SHOOTER MANUAL
+    private static final double kShooterFallbackPercent = -0.68;
     // AutoAim solo debe activarse si hay un tag válido visible.
     private boolean canEnableAutoAimNow() {
         return m_camara.hasAutoAimTag() && m_camara.getAutoAimTagId() != 0;
@@ -779,7 +780,7 @@ public class RobotContainer {
 
         // Angular: Y -> abajo
         m_operatorController.a().onTrue(
-            new InstantCommand(() -> m_angular.irAPosicion(-(360.0 * 31.5)), m_angular)
+            new InstantCommand(() -> m_angular.irAPosicion(-(360.0 * 30)), m_angular)
         );
 
         // Angular: START -> posición intermedia
