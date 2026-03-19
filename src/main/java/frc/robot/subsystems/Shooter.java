@@ -40,6 +40,7 @@ public class Shooter extends SubsystemBase {
 	private double m_softStartUntilS = 0.0;
 	private boolean m_lastRequestWasZero = true;
 	private double m_lastNonIdleRequestS = 0.0;
+	private double m_lastShooterStartS = 0.0;
 	private static final double kIdleReturnDelayS = 0.15;
 
 	// Max RPM usado para calcular setpoint (no PID)
@@ -50,24 +51,32 @@ public class Shooter extends SubsystemBase {
 
 	// Kicker: pequeño boost temporal cuando caen RPM (solo en open-loop)
 	private static final String kKickerEnableKey = "Shooter/Kicker/Enable";
+	private static final String kKickerAllowAssistedKey = "Shooter/Kicker/AllowAssisted";
 	private static final String kKickerBoostKey = "Shooter/Kicker/Boost";
 	private static final String kKickerDurationKey = "Shooter/Kicker/DurationS";
 	private static final String kKickerDropRpmKey = "Shooter/Kicker/DropRpm";
 	private static final String kKickerMinTargetRpmKey = "Shooter/Kicker/MinTargetRpm";
 	private boolean m_kickerDashboardInitialized = false;
 	private boolean m_kickerEnabled = true;
+	private boolean m_kickerAllowAssisted = true;
 	private double m_kickerBoostPercent = 0.30;
 	private double m_kickerDurationS = 0.45;
 	private double m_kickerDropRpm = 50.0;
 	private double m_kickerMinTargetRpm = 800.0;
+	private static final double kKickerStartupBlockS = 0.50;
 	private double m_kickerUntilS = 0.0;
 	private boolean m_kickerActive = false;
 
+	// Boost extra cuando las bandas están corriendo (para evitar caída de RPM al alimentar)
+	private static final String kBeltBoostEnableKey = "Shooter/BeltBoost/Enable";
+	private static final String kBeltBoostPercentKey = "Shooter/BeltBoost/Percent";
+	private boolean m_beltBoostDashboardInitialized = false;
+	private boolean m_beltBoostEnabled = true;
+	private double m_beltBoostPercent = 0.08;
+	private boolean m_beltActive = false;
+
 	private boolean m_emergencyEnabled = false;
 	private static final double kEmergencyPercent = -0.5;
-	private static final String kManualShooterPercentKey = "Shooter/ManualPercent";
-	private boolean m_manualShooterDashboardInitialized = false;
-	private double m_manualShooterPercent = -0.60;
 	private static final double kBeltPercent = 0.5;
 	private boolean m_assistedActive = false;
 	// Idle spin deshabilitado: el shooter SOLO se mueve cuando se ordena por botones/autos.
@@ -153,7 +162,9 @@ public class Shooter extends SubsystemBase {
 		boolean requestIsZero = Math.abs(requestedPercent) < 1e-6;
 		if (!m_idleRequestActive) {
 			if (!requestIsZero && m_lastRequestWasZero) {
-				m_softStartUntilS = Timer.getFPGATimestamp() + kSoftStartTimeS;
+				double now = Timer.getFPGATimestamp();
+				m_softStartUntilS = now + kSoftStartTimeS;
+				m_lastShooterStartS = now;
 			}
 			m_lastRequestWasZero = requestIsZero;
 			if (!requestIsZero) {
@@ -206,11 +217,19 @@ public class Shooter extends SubsystemBase {
 		if (m_kickerEnabled
 				&& !"manual".equals(m_requestSource)
 				&& !m_idleRequestActive
+				&& (m_kickerAllowAssisted || !m_assistedActive)
+				&& (now - m_lastShooterStartS) >= kKickerStartupBlockS
 				&& setpointAbs >= m_kickerMinTargetRpm
 				&& (setpointAbs - actualAbs) >= m_kickerDropRpm) {
 			m_kickerUntilS = now + m_kickerDurationS;
 		}
 		m_kickerActive = now < m_kickerUntilS;
+		if (m_beltActive && m_beltBoostEnabled && Math.abs(appliedPercentOpenLoop) > 1e-6) {
+			appliedPercentOpenLoop = MathUtil.clamp(
+				appliedPercentOpenLoop + Math.copySign(m_beltBoostPercent, appliedPercentOpenLoop),
+				-1.0,
+				1.0);
+		}
 		if (m_kickerActive) {
 			appliedPercentOpenLoop = MathUtil.clamp(
 				appliedPercentOpenLoop + Math.copySign(m_kickerBoostPercent, appliedPercentOpenLoop),
@@ -231,8 +250,8 @@ public class Shooter extends SubsystemBase {
 
 	public void startManualShooter() {
 		m_assistedActive = false;
-		m_requestSource = "manual";
-		setShooterPercentInternal(m_manualShooterPercent);
+		m_requestSource = "manual_disabled";
+		setShooterPercentInternal(0.0);
 	}
 
 	public void setAssistedShooterPercent(double percent) {
@@ -354,14 +373,17 @@ public class Shooter extends SubsystemBase {
 	}
 
 	public void startBelt() {
+		m_beltActive = true;
 		m_beltMotor53.set(kBeltPercent);
 	}
 
 	public void reverseBelt() {
+		m_beltActive = true;
 		m_beltMotor53.set(-kBeltPercent);
 	}
 
 	public void stopBelt() {
+		m_beltActive = false;
 		m_beltMotor53.set(0.0);
 	}
 
@@ -373,7 +395,7 @@ public class Shooter extends SubsystemBase {
 			m_rampDashboardInitialized = true;
 		}
 		m_rampTimeS = SmartDashboard.getNumber(kRampTimeKey, m_rampTimeS);
-		m_rampTimeS = MathUtil.clamp(m_rampTimeS, 0.05, 2.0);
+		m_rampTimeS = MathUtil.clamp(m_rampTimeS, 0.05, 1.0);
 
 		if (!m_maxRpmDashboardInitialized) {
 			SmartDashboard.putNumber(kMaxRpmKey, m_velMaxRpm);
@@ -381,25 +403,28 @@ public class Shooter extends SubsystemBase {
 		}
 		if (!m_kickerDashboardInitialized) {
 			SmartDashboard.putBoolean(kKickerEnableKey, m_kickerEnabled);
+			SmartDashboard.putBoolean(kKickerAllowAssistedKey, m_kickerAllowAssisted);
 			SmartDashboard.putNumber(kKickerBoostKey, m_kickerBoostPercent);
 			SmartDashboard.putNumber(kKickerDurationKey, m_kickerDurationS);
 			SmartDashboard.putNumber(kKickerDropRpmKey, m_kickerDropRpm);
 			SmartDashboard.putNumber(kKickerMinTargetRpmKey, m_kickerMinTargetRpm);
 			m_kickerDashboardInitialized = true;
 		}
-		if (!m_manualShooterDashboardInitialized) {
-			SmartDashboard.putNumber(kManualShooterPercentKey, m_manualShooterPercent);
-			m_manualShooterDashboardInitialized = true;
-		}
 		m_velMaxRpm = SmartDashboard.getNumber(kMaxRpmKey, m_velMaxRpm);
 		m_kickerEnabled = SmartDashboard.getBoolean(kKickerEnableKey, m_kickerEnabled);
+		m_kickerAllowAssisted = SmartDashboard.getBoolean(kKickerAllowAssistedKey, m_kickerAllowAssisted);
 		m_kickerBoostPercent = SmartDashboard.getNumber(kKickerBoostKey, m_kickerBoostPercent);
 		m_kickerDurationS = SmartDashboard.getNumber(kKickerDurationKey, m_kickerDurationS);
 		m_kickerDropRpm = SmartDashboard.getNumber(kKickerDropRpmKey, m_kickerDropRpm);
 		m_kickerMinTargetRpm = SmartDashboard.getNumber(kKickerMinTargetRpmKey, m_kickerMinTargetRpm);
-		double manualPercentRaw = SmartDashboard.getNumber(kManualShooterPercentKey, m_manualShooterPercent);
-		manualPercentRaw = MathUtil.clamp(Math.abs(manualPercentRaw), 0.0, 1.0);
-		m_manualShooterPercent = -manualPercentRaw;
+
+		if (!m_beltBoostDashboardInitialized) {
+			SmartDashboard.putBoolean(kBeltBoostEnableKey, m_beltBoostEnabled);
+			SmartDashboard.putNumber(kBeltBoostPercentKey, m_beltBoostPercent);
+			m_beltBoostDashboardInitialized = true;
+		}
+		m_beltBoostEnabled = SmartDashboard.getBoolean(kBeltBoostEnableKey, m_beltBoostEnabled);
+		m_beltBoostPercent = SmartDashboard.getNumber(kBeltBoostPercentKey, m_beltBoostPercent);
 
 		// Hard stop desde Shuffleboard:
 		//  - publicar default una sola vez
@@ -464,10 +489,14 @@ public class Shooter extends SubsystemBase {
 		SmartDashboard.putNumber("Shooter/MaxRpm", m_velMaxRpm);
 		SmartDashboard.putBoolean("Shooter/Kicker/Active", m_kickerActive);
 		SmartDashboard.putBoolean("Shooter/Kicker/Enable", m_kickerEnabled);
+		SmartDashboard.putBoolean("Shooter/Kicker/AllowAssisted", m_kickerAllowAssisted);
 		SmartDashboard.putNumber("Shooter/Kicker/Boost", m_kickerBoostPercent);
 		SmartDashboard.putNumber("Shooter/Kicker/DurationS", m_kickerDurationS);
 		SmartDashboard.putNumber("Shooter/Kicker/DropRpm", m_kickerDropRpm);
 		SmartDashboard.putNumber("Shooter/Kicker/MinTargetRpm", m_kickerMinTargetRpm);
+		SmartDashboard.putBoolean("Shooter/BeltBoost/Enable", m_beltBoostEnabled);
+		SmartDashboard.putNumber("Shooter/BeltBoost/Percent", m_beltBoostPercent);
+		SmartDashboard.putBoolean("Shooter/BeltBoost/Active", m_beltActive && m_beltBoostEnabled);
 		SmartDashboard.putString("Shooter/LastCommand", m_lastShooterCommand);
 		SmartDashboard.putString("Shooter/RequestSource", m_requestSource);
 	}

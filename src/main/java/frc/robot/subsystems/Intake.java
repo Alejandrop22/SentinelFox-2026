@@ -8,7 +8,7 @@ public class Intake extends SubsystemBase {
 	private static final int kIntakeMotorCanId = 55;
 	private static final double kReversePercent = -1.0;
 	private static final double kFullReversePercent = -1.0;
-	private static final double kForwardPercent = 0.5;
+	private static final double kForwardPercent = 0.9;
 
 	private final SparkMax m_intakeMotor = new SparkMax(kIntakeMotorCanId, MotorType.kBrushless);
 

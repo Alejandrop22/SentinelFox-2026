@@ -1,0 +1,95 @@
+{
+  "version": "2025.0",
+  "waypoints": [
+    {
+      "anchor": {
+        "x": 8.040518072289156,
+        "y": 3.6197469879518076
+      },
+      "prevControl": null,
+      "nextControl": {
+        "x": 8.01866265060241,
+        "y": 3.0952168674698806
+      },
+      "isLocked": false,
+      "linkedName": "5End1"
+    },
+    {
+      "anchor": {
+        "x": 7.8219638554216875,
+        "y": 1.1719397590361438
+      },
+      "prevControl": {
+        "x": 7.9698040694767025,
+        "y": 1.5135016328873856
+      },
+      "nextControl": {
+        "x": 7.505060240963855,
+        "y": 0.43978313253011925
+      },
+      "isLocked": false,
+      "linkedName": null
+    },
+    {
+      "anchor": {
+        "x": 3.155831325301205,
+        "y": 0.7348313253012042
+      },
+      "prevControl": {
+        "x": 5.724024388711024,
+        "y": 0.7661507529037614
+      },
+      "nextControl": {
+        "x": 2.2597590361445783,
+        "y": 0.7239036144578314
+      },
+      "isLocked": false,
+      "linkedName": null
+    },
+    {
+      "anchor": {
+        "x": 3.155831325301205,
+        "y": 1.7838915662650607
+      },
+      "prevControl": {
+        "x": 2.4455301204819277,
+        "y": 1.7511084337349396
+      },
+      "nextControl": null,
+      "isLocked": false,
+      "linkedName": "5End2"
+    }
+  ],
+  "rotationTargets": [
+    {
+      "waypointRelativePos": 1.6879668049792467,
+      "rotationDegrees": 180.0
+    },
+    {
+      "waypointRelativePos": 1.8946058091286315,
+      "rotationDegrees": 180.0
+    }
+  ],
+  "constraintZones": [],
+  "pointTowardsZones": [],
+  "eventMarkers": [],
+  "globalConstraints": {
+    "maxVelocity": 4.0,
+    "maxAcceleration": 4.0,
+    "maxAngularVelocity": 540.0,
+    "maxAngularAcceleration": 720.0,
+    "nominalVoltage": 12.0,
+    "unlimited": false
+  },
+  "goalEndState": {
+    "velocity": 0,
+    "rotation": 59.2645122980799
+  },
+  "reversed": false,
+  "folder": null,
+  "idealStartingState": {
+    "velocity": 0,
+    "rotation": 90.0
+  },
+  "useDefaultConstraints": true
+}

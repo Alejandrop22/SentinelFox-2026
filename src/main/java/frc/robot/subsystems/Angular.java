@@ -20,6 +20,7 @@ public class Angular extends SubsystemBase {
 
   // Config guardada para poder re-aplicar IdleMode en runtime
   private final SparkMaxConfig m_config = new SparkMaxConfig();
+  private IdleMode m_idleMode = IdleMode.kBrake;
 
   private double m_targetPosition = 0;
   private boolean m_abajo = false;
@@ -95,6 +96,32 @@ public class Angular extends SubsystemBase {
 
     m_encoder.setPosition(0);
     m_targetPosition = 0;
+  }
+
+  private void applyIdleMode(IdleMode mode) {
+    if (m_idleMode == mode) {
+      return;
+    }
+    m_idleMode = mode;
+    m_config.idleMode(mode);
+    m_angularMotor.configure(m_config, ResetMode.kResetSafeParameters, PersistMode.kPersistParameters);
+    SmartDashboard.putString("Angular/IdleMode", mode.toString());
+  }
+
+  /**
+   * Cuando el intake está activo, ponemos el Angular en coast para no resistir.
+   * Al desactivar, regresamos a brake y re-aplicamos el último setpoint.
+   */
+  public void setIntakeCoastMode(boolean enabled) {
+    if (enabled) {
+      applyIdleMode(IdleMode.kCoast);
+      m_manualOpenLoop = true;
+      m_angularMotor.set(0.0);
+    } else {
+      applyIdleMode(IdleMode.kBrake);
+      m_manualOpenLoop = false;
+      irAPosicion(m_targetPosition);
+    }
   }
 
   public void irAPosicion(double grados) {

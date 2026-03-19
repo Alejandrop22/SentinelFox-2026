@@ -7,13 +7,13 @@
         {
           "type": "named",
           "data": {
-            "name": "autoAimDisable"
+            "name": "angularAbajo"
           }
         },
         {
-          "type": "named",
+          "type": "wait",
           "data": {
-            "name": "angularAbajo"
+            "waitTime": 1.0
           }
         },
         {
@@ -25,7 +25,7 @@
         {
           "type": "path",
           "data": {
-            "pathName": "1Path1"
+            "pathName": "4Path1"
           }
         },
         {
@@ -43,7 +43,7 @@
         {
           "type": "wait",
           "data": {
-            "waitTime": 2.0
+            "waitTime": 1.0
           }
         },
         {
@@ -55,7 +55,7 @@
         {
           "type": "wait",
           "data": {
-            "waitTime": 5.0
+            "waitTime": 4.0
           }
         },
         {
@@ -79,19 +79,19 @@
         {
           "type": "path",
           "data": {
-            "pathName": "1Path2"
-          }
-        },
-        {
-          "type": "named",
-          "data": {
-            "name": "autoAimEnable"
+            "pathName": "4Path2"
           }
         },
         {
           "type": "named",
           "data": {
             "name": "shooterOn"
+          }
+        },
+        {
+          "type": "named",
+          "data": {
+            "name": "autoAimEnable"
           }
         },
         {

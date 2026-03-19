@@ -7,7 +7,6 @@ import edu.wpi.first.wpilibj2.command.RunCommand;
 import frc.robot.subsystems.DriveSubsystem;
 import frc.robot.subsystems.Camara;
 import frc.robot.subsystems.Angular;
-import frc.robot.subsystems.Align;
 import frc.robot.subsystems.Intake;
 import frc.robot.subsystems.Shooter;
 import frc.robot.subsystems.AuxMotor;
@@ -23,7 +22,6 @@ import edu.wpi.first.wpilibj.DriverStation;
 import edu.wpi.first.wpilibj.Filesystem;
 import edu.wpi.first.wpilibj2.command.Commands;
 import edu.wpi.first.math.kinematics.ChassisSpeeds;
-import edu.wpi.first.wpilibj.Timer;
 import com.pathplanner.lib.auto.AutoBuilder;
 import com.pathplanner.lib.auto.NamedCommands;
 import com.pathplanner.lib.config.PIDConstants;
@@ -48,7 +46,6 @@ public class RobotContainer {
     private final Camara m_camara = new Camara();
     private final DriveSubsystem m_robotDrive = new DriveSubsystem(m_camara);
     private final Angular m_angular = new Angular();
-    private final Command m_alignCommand = Align.createOneShotCommand(m_robotDrive, m_camara);
     private final Intake m_intake = new Intake();
     private final Shooter m_shooter = new Shooter();
     private final AsistedShooter m_asistedShooter = new AsistedShooter(m_camara);
@@ -74,36 +71,28 @@ public class RobotContainer {
     private int m_rcHeartbeat = 0;
 
     private boolean m_intake100ToggleActive = false;
-    private boolean m_angularOscillateActive = false;
-    private boolean m_angularOscillateForward = true;
-    private double m_angularOscillateHomeDeg = 0.0;
-    private double m_angularOscillateBackDeg = 0.0;
-    private static final double kAngularHomeDeg = 0.0;
-    private static final double kAngularOscillateTolDeg = 15.0;
-    private static final double kAngularOscillateDeltaDeg = 360.0 * 5.0;
-    private final Command m_angularOscillateCommand = new RunCommand(() -> {
-        double target = m_angularOscillateForward ? m_angularOscillateHomeDeg : m_angularOscillateBackDeg;
-        m_angular.irAPosicion(target);
-        if (Math.abs(m_angular.getPositionDeg() - target) <= kAngularOscillateTolDeg) {
-            m_angularOscillateForward = !m_angularOscillateForward;
-        }
-    }, m_angular);
-
-
     // Angular jog (para calibración / reset 0)
     private boolean m_angularJogActive = false;
 
     // Auto command helpers (PathPlanner): shooter toggle en auto
     private Command m_autoShooterHoldCommand = null;
 
+    // Driver shooter override (D-pad)
+    private boolean m_driverShooterOverrideActive = false;
+    private double m_driverShooterOverridePercent = 0.0;
+
+    // Driver heading-to-180 command tuning
+    private static final double kDriverTurn180Kp = 0.02;
+    private static final double kDriverTurn180MaxRot = 0.75;
+
     // Debounce simple para AutoAim-tag: evita que un frame sin tag apague/prenda el shooter.
     private int m_autoAimTagPresentCycles = 0;
     private static final int kAutoAimTagDebounceCycles = 5; // ~100ms
 
-    // Shooter fallback (equivalente al viejo "-4000 RPM").
-    // Mapea a porcentaje, y el subsistema Shooter lo convertirá a VOLTAJE.
-    //AQUI ES EL SHOOTER MANUAL
-    private static final double kShooterFallbackPercent = -0.68;
+    // Shooter fallback (AutoAim OFF) tunable desde Shuffleboard.
+    private static final String kShooterFallbackPercentKey = "Shooter/FallbackPercent";
+    private boolean m_shooterFallbackDashboardInitialized = false;
+    private double m_shooterFallbackPercent = -0.55;
     // AutoAim solo debe activarse si hay un tag válido visible.
     private boolean canEnableAutoAimNow() {
         return m_camara.hasAutoAimTag() && m_camara.getAutoAimTagId() != 0;
@@ -120,15 +109,44 @@ public class RobotContainer {
         edu.wpi.first.wpilibj.smartdashboard.SmartDashboard.putNumber("Shooter/Assisted/PercentCmd", percent);
     }
 
+    private double getShooterFallbackPercent() {
+        if (!m_shooterFallbackDashboardInitialized) {
+            SmartDashboard.putNumber(kShooterFallbackPercentKey, m_shooterFallbackPercent);
+            m_shooterFallbackDashboardInitialized = true;
+        }
+        m_shooterFallbackPercent = MathUtil.clamp(
+            SmartDashboard.getNumber(kShooterFallbackPercentKey, m_shooterFallbackPercent),
+            -1.0,
+            0.0);
+        return m_shooterFallbackPercent;
+    }
+
     private void logAutoEvent(String name) {
         SmartDashboard.putString("Auto/Event", name);
         DriverStation.reportWarning("Auto event: " + name, false);
     }
 
+    private Command getTurnToHeadingCommand(double targetHeadingDeg) {
+        final double kHeadingTolDeg = 3.0;
+        return Commands.runEnd(
+            () -> {
+                // Deshabilitar AutoAim para evitar pelea con override
+                if (m_robotDrive.isAutoAimEnabled()) {
+                    m_robotDrive.setAutoAimEnabled(false);
+                    SmartDashboard.putBoolean("AutoAim/EnabledRequested", false);
+                }
+                double headingErrDeg = MathUtil.inputModulus(targetHeadingDeg - m_robotDrive.getHeading(), -180.0, 180.0);
+                double rotCmd = MathUtil.clamp(headingErrDeg * kDriverTurn180Kp, -kDriverTurn180MaxRot, kDriverTurn180MaxRot);
+                m_robotDrive.setRotationOverride(rotCmd);
+            },
+            () -> m_robotDrive.clearRotationOverride(),
+            m_robotDrive
+        ).until(() -> Math.abs(MathUtil.inputModulus(targetHeadingDeg - m_robotDrive.getHeading(), -180.0, 180.0)) <= kHeadingTolDeg);
+    }
+
     public RobotContainer() {
         configurePathPlanner();
         configureBindingsTwoControllers();
-        Align.publishDefaults();
 
 
         m_robotDrive.setDefaultCommand(
@@ -182,8 +200,6 @@ public class RobotContainer {
             desired = Estado_2; // Assisted shooter = DIO 7
         } else if (m_intake100ToggleActive) {
             desired = Estado_3; // Intake 100% = DIO 8
-        } else if (m_angularOscillateActive) {
-            desired = Estado_4; // Oscilación angular = DIO 9 (solo si no hubo emergencia)
         }
 
         if (desired != m_activeStatusDio) {
@@ -282,7 +298,10 @@ public class RobotContainer {
                         m_angular.irAPosicion(-(360.0 * 31.5));
                     }, m_angular),
                     Commands.waitSeconds(0.5),
-                    new InstantCommand(() -> m_intake.intakeReverse(), m_intake)
+                    new InstantCommand(() -> {
+                        m_angular.setIntakeCoastMode(true);
+                        m_intake.intakeReverse();
+                    }, m_angular, m_intake)
                 )
             );
 
@@ -291,8 +310,9 @@ public class RobotContainer {
                 "IntakeOff",
                 new InstantCommand(() -> {
                     logAutoEvent("IntakeOff");
+                    m_angular.setIntakeCoastMode(false);
                     m_intake.stop();
-                }, m_intake)
+                }, m_angular, m_intake)
             );
 
             // ===== Nombres nuevos para autos (lowercase) =====
@@ -301,7 +321,7 @@ public class RobotContainer {
                 "angularAbajo",
                 new InstantCommand(() -> {
                     logAutoEvent("angularAbajo");
-                    m_angular.irAPosicion(-(360.0 * 31.5));
+                    m_angular.irAPosicion(-(360.0 * 32));
                 }, m_angular)
             );
 
@@ -314,13 +334,23 @@ public class RobotContainer {
                 }, m_angular)
             );
 
+            // jogAngular: mismo jog one-shot que el RB del operador
+            NamedCommands.registerCommand(
+                "jogAngular",
+                new InstantCommand(() -> {
+                    logAutoEvent("jogAngular");
+                    m_angular.setUnjamCycleEnabled(true);
+                }, m_angular)
+            );
+
             // intakeOn: mismo que LT del operador (mantener)
             NamedCommands.registerCommand(
                 "intakeOn",
                 new InstantCommand(() -> {
                     logAutoEvent("intakeOn");
+                    m_angular.setIntakeCoastMode(true);
                     m_intake.intakeReverse();
-                }, m_intake)
+                }, m_angular, m_intake)
             );
 
             // intakeOff: apagar intake
@@ -328,8 +358,9 @@ public class RobotContainer {
                 "intakeOff",
                 new InstantCommand(() -> {
                     logAutoEvent("intakeOff");
+                    m_angular.setIntakeCoastMode(false);
                     m_intake.stop();
-                }, m_intake)
+                }, m_angular, m_intake)
             );
 
             // autoAimEnable: activar AutoAim (solo si hay tag válido)
@@ -436,7 +467,7 @@ public class RobotContainer {
                             double cmdPercent;
 
                             if (!m_robotDrive.isAutoAimEnabled()) {
-                                cmdPercent = m_asistedShooter.applyPercentMultiplier(kShooterFallbackPercent);
+                                cmdPercent = m_asistedShooter.applyPercentMultiplier(getShooterFallbackPercent());
                                 setAssistedShooterPercent(cmdPercent);
                                 SmartDashboard.putString("AssistShooter/Auto/Mode", "AUTOAIM_OFF_FALLBACK");
                                 return;
@@ -452,7 +483,7 @@ public class RobotContainer {
                             boolean hasTagDebounced = m_autoAimTagPresentCycles >= kAutoAimTagDebounceCycles;
                             boolean tooFar = m_camara.getAutoAimDistanceM() > 5.0;
                             if (!hasTagDebounced || tooFar) {
-                                cmdPercent = m_asistedShooter.applyPercentMultiplier(kShooterFallbackPercent);
+                                cmdPercent = m_asistedShooter.applyPercentMultiplier(getShooterFallbackPercent());
                                 setAssistedShooterPercent(cmdPercent);
                                 SmartDashboard.putString(
                                     "AssistShooter/Auto/Mode",
@@ -464,14 +495,14 @@ public class RobotContainer {
                                 m_shooter.clearAssistedRequest();
                                 cmdPercent = m_asistedShooter.getDesiredPercent();
                                 if (!Double.isFinite(cmdPercent) || Math.abs(cmdPercent) < 1e-6) {
-                                    cmdPercent = m_asistedShooter.applyPercentMultiplier(kShooterFallbackPercent);
+                                    cmdPercent = m_asistedShooter.applyPercentMultiplier(getShooterFallbackPercent());
                                     SmartDashboard.putString("AssistShooter/Auto/Mode", "ASSIST_INVALID_FALLBACK");
                                 } else {
                                     SmartDashboard.putString("AssistShooter/Auto/Mode", "ASSIST_PERCENT");
                                 }
                                 setAssistedShooterPercent(cmdPercent);
                             } else {
-                                cmdPercent = m_asistedShooter.applyPercentMultiplier(kShooterFallbackPercent);
+                                cmdPercent = m_asistedShooter.applyPercentMultiplier(getShooterFallbackPercent());
                                 setAssistedShooterPercent(cmdPercent);
                                 SmartDashboard.putString("AssistShooter/Auto/Mode", "ASSIST_CANT_SHOOT_FALLBACK");
                             }
@@ -693,26 +724,12 @@ public class RobotContainer {
             new InstantCommand(() -> m_robotDrive.zeroHeading(), m_robotDrive)
         );
 
+        // Y (tap): girar a 180° de IMU (ruta más corta) y terminar solo
+        m_driverController.y().onTrue(getTurnToHeadingCommand(180.0));
+
         // LT del Driver: LIBRE (shooter ahora es solo del operador)
 
-        // B (toggle): ciclo angular 5 rotaciones atras y 5 adelante, vuelve a HOME al apagar
-        m_driverController.b().onTrue(
-            new InstantCommand(() -> {
-                m_angularOscillateActive = !m_angularOscillateActive;
-                if (m_angularOscillateActive) {
-                    double current = m_angular.getPositionDeg();
-                    m_angularOscillateHomeDeg = current;
-                    m_angularOscillateBackDeg = current - kAngularOscillateDeltaDeg;
-                    m_angularOscillateForward = false;
-                    CommandScheduler.getInstance().schedule(m_angularOscillateCommand);
-                } else {
-                    CommandScheduler.getInstance().cancel(m_angularOscillateCommand);
-                    m_angular.irAPosicion(kAngularHomeDeg);
-                }
-            }, m_angular)
-        );
-
-        // A/Y del driver libres (DIO ahora son estados automáticos)
+        // B libre
 
         // =========================
         // Control 1 (Operator) - Subsistemas
@@ -727,40 +744,31 @@ public class RobotContainer {
                 if (m_intake100ToggleActive) {
                     return;
                 }
+                m_angular.setIntakeCoastMode(true);
                 m_intake.intakeReverse();
-            }, m_intake)
+            }, m_angular, m_intake)
         ).onFalse(
             new InstantCommand(() -> {
                 if (m_intake100ToggleActive) {
                     // Si sigue activo 100%, dejarlo prendido
                     return;
                 }
+                m_angular.setIntakeCoastMode(false);
                 m_intake.stop();
-            }, m_intake)
-        );
-
-        // Intake: POVUp (toggle) 100% forward
-        // Al apagar, se apaga el intake (LT ahora es while-held).
-        m_operatorController.povUp().onTrue(
-            new InstantCommand(() -> {
-                m_intake100ToggleActive = !m_intake100ToggleActive;
-                if (m_intake100ToggleActive) {
-                    // Prender 100%
-                    // Nota: la dirección real depende de cómo esté implementado el Intake.
-                    // Aquí llamamos a intakeFullReverse() tal como está en el subsistema.
-                    m_intake.intakeFullReverse();
-                } else {
-                    // Apagar 100%
-                    m_intake.stop();
-                }
-            }, m_intake)
+            }, m_angular, m_intake)
         );
 
         // Intake: LB (while held) reverse
         m_operatorController.leftBumper().whileTrue(
-            new RunCommand(() -> m_intake.intakeForward(), m_intake)
+            new RunCommand(() -> {
+                m_angular.setIntakeCoastMode(true);
+                m_intake.intakeForward();
+            }, m_angular, m_intake)
         ).onFalse(
-            new InstantCommand(() -> m_intake.stop(), m_intake)
+            new InstantCommand(() -> {
+                m_angular.setIntakeCoastMode(false);
+                m_intake.stop();
+            }, m_angular, m_intake)
         );
 
         // Angular: Y -> posición "home" (setpoint = -360°)
@@ -780,12 +788,7 @@ public class RobotContainer {
 
         // Angular: Y -> abajo
         m_operatorController.a().onTrue(
-            new InstantCommand(() -> m_angular.irAPosicion(-(360.0 * 30)), m_angular)
-        );
-
-        // Angular: START -> posición intermedia
-        m_operatorController.start().onTrue(
-            new InstantCommand(() -> m_angular.irAPosicion(-(360.0 * 17)), m_angular)
+            new InstantCommand(() -> m_angular.irAPosicion(-(360.0 * 32)), m_angular)
         );
 
         // POVLeft (tap): Solenoides -> alternar ambos (A y B)
@@ -793,16 +796,44 @@ public class RobotContainer {
             new InstantCommand(() -> m_solenoides.alternarAmbos(), m_solenoides)
         );
 
-        // Driver POVLeft (one-shot): Toggle AutoAim ON/OFF
+        // Driver A (one-shot): Toggle AutoAim ON/OFF
         // Reglas:
         // - Para prender AutoAim: debe haber tag válido visible (Camara.hasAutoAimTag()).
         // - Para apagarlo: siempre se permite.
-        m_driverController.povLeft().onTrue(
+        m_driverController.a().onTrue(
             getAutoAimToggleCommand()
         );
 
-        // Driver POVRight (while held): alinear al apriltag más cercano a 1m
-        m_driverController.povRight().onTrue(m_alignCommand);
+        // POVLeft y POVRight libres
+
+        // Driver D-pad: overrides de shooter (mientras se mantenga presionado)
+        m_driverController.povUp().whileTrue(
+            new InstantCommand(() -> {
+                m_driverShooterOverrideActive = true;
+                m_driverShooterOverridePercent = -0.60;
+            })
+        ).onFalse(new InstantCommand(() -> m_driverShooterOverrideActive = false));
+
+        m_driverController.povLeft().whileTrue(
+            new InstantCommand(() -> {
+                m_driverShooterOverrideActive = true;
+                m_driverShooterOverridePercent = -0.70;
+            })
+        ).onFalse(new InstantCommand(() -> m_driverShooterOverrideActive = false));
+
+        m_driverController.povRight().whileTrue(
+            new InstantCommand(() -> {
+                m_driverShooterOverrideActive = true;
+                m_driverShooterOverridePercent = -0.58;
+            })
+        ).onFalse(new InstantCommand(() -> m_driverShooterOverrideActive = false));
+
+        m_driverController.povDown().whileTrue(
+            new InstantCommand(() -> {
+                m_driverShooterOverrideActive = true;
+                m_driverShooterOverridePercent = -1.0;
+            })
+        ).onFalse(new InstantCommand(() -> m_driverShooterOverrideActive = false));
 
         // Shooter Assisted (RT) en el operador
         m_operatorController.rightTrigger().whileTrue(
@@ -824,38 +855,11 @@ public class RobotContainer {
             }, m_shooter, m_auxMotor)
         );
 
-        // POVDown (tap): girar 180° (media vuelta) - mismo comportamiento que en 1 control
-        m_operatorController.povDown().onTrue(
-            Commands.sequence(
-                new InstantCommand(() -> SmartDashboard.putString("Drive/Turn180/State", "START")),
-                // Pequeño pulso de giro. Ajusta Drive/Turn180/RotCmd y Drive/Turn180/TimeS desde Shuffleboard.
-                Commands.runOnce(() -> {
-                    double rotCmd = SmartDashboard.getNumber("Drive/Turn180/RotCmd", 0.85);
-                    double timeS = SmartDashboard.getNumber("Drive/Turn180/TimeS", 0.75);
-                    rotCmd = MathUtil.clamp(rotCmd, -1.0, 1.0);
-                    timeS = MathUtil.clamp(timeS, 0.1, 2.0);
-                    SmartDashboard.putNumber("Drive/Turn180/RotCmdApplied", rotCmd);
-                    SmartDashboard.putNumber("Drive/Turn180/TimeSApplied", timeS);
-                    SmartDashboard.putNumber("Drive/Turn180/T0", Timer.getFPGATimestamp());
-                }),
-                Commands.run(() -> {
-                        double rotCmd = SmartDashboard.getNumber("Drive/Turn180/RotCmdApplied", 0.85);
-                        m_robotDrive.setRotationOverride(rotCmd);
-                        SmartDashboard.putString("Drive/Turn180/State", "TURNING");
-                    }, m_robotDrive)
-                    .withTimeout(SmartDashboard.getNumber("Drive/Turn180/TimeSApplied", 0.75)),
-                new InstantCommand(() -> {
-                    m_robotDrive.clearRotationOverride();
-                    SmartDashboard.putString("Drive/Turn180/State", "DONE");
-                }, m_robotDrive)
-            )
-        );
-
         // PovDown (while held): Banda + AuxMotor
         m_operatorController.povDown().whileTrue(
             new RunCommand(() -> {
                 m_shooter.reverseBelt();
-                m_auxMotor.stop();
+                m_auxMotor.startReverseAux();
             }, m_shooter, m_auxMotor)
         ).onFalse(
             new InstantCommand(() -> {
@@ -918,12 +922,20 @@ public class RobotContainer {
                 // Elegir UN percent a mandar este ciclo. No hagas stop+set en el mismo loop.
                 double cmdPercent;
 
+                // Driver override (D-pad) tiene prioridad
+                if (m_driverShooterOverrideActive) {
+                    cmdPercent = m_driverShooterOverridePercent;
+                    setAssistedShooterPercent(cmdPercent);
+                    SmartDashboard.putString("AssistShooter/RT/Mode", "DRIVER_OVERRIDE");
+                    return;
+                }
+
                 // Reglas (porcentaje->voltaje):
                 // 1) AutoAim OFF  -> shooter fijo (fallback)
                 // 2) AutoAim ON pero SIN tag o >5m -> shooter fijo (fallback)
                 // 3) AutoAim ON y tag válido (<=5m) -> AssistedShooter (fórmula -> %)
                 if (!m_robotDrive.isAutoAimEnabled()) {
-                    cmdPercent = m_asistedShooter.applyPercentMultiplier(kShooterFallbackPercent);
+                    cmdPercent = m_asistedShooter.applyPercentMultiplier(getShooterFallbackPercent());
                     setAssistedShooterPercent(cmdPercent);
                     SmartDashboard.putString("AssistShooter/RT/Mode", "AUTOAIM_OFF_FALLBACK");
                     return;
@@ -940,7 +952,7 @@ public class RobotContainer {
                 boolean hasTagDebounced = m_autoAimTagPresentCycles >= kAutoAimTagDebounceCycles;
                 boolean tooFar = m_camara.getAutoAimDistanceM() > 5.0;
                 if (!hasTagDebounced || tooFar) {
-                    cmdPercent = m_asistedShooter.applyPercentMultiplier(kShooterFallbackPercent);
+                    cmdPercent = m_asistedShooter.applyPercentMultiplier(getShooterFallbackPercent());
                     setAssistedShooterPercent(cmdPercent);
                     SmartDashboard.putString(
                         "AssistShooter/RT/Mode",
@@ -956,7 +968,7 @@ public class RobotContainer {
                     cmdPercent = m_asistedShooter.getDesiredPercent();
                     // Seguridad: si por alguna razon sale 0 o NaN, usa fallback.
                     if (!Double.isFinite(cmdPercent) || Math.abs(cmdPercent) < 1e-6) {
-                        cmdPercent = m_asistedShooter.applyPercentMultiplier(kShooterFallbackPercent);
+                        cmdPercent = m_asistedShooter.applyPercentMultiplier(getShooterFallbackPercent());
                         SmartDashboard.putString("AssistShooter/RT/Mode", "ASSIST_INVALID_FALLBACK");
                     } else {
                         SmartDashboard.putString("AssistShooter/RT/Mode", "ASSIST_PERCENT");
@@ -964,7 +976,7 @@ public class RobotContainer {
                     setAssistedShooterPercent(cmdPercent);
                 } else {
                     // Si por alguna razón canShootNow() no deja (distancia 0, etc.), usar el fallback fuerte
-                    cmdPercent = m_asistedShooter.applyPercentMultiplier(kShooterFallbackPercent);
+                    cmdPercent = m_asistedShooter.applyPercentMultiplier(getShooterFallbackPercent());
                     setAssistedShooterPercent(cmdPercent);
                     SmartDashboard.putString("AssistShooter/RT/Mode", "ASSIST_CANT_SHOOT_FALLBACK");
                 }
